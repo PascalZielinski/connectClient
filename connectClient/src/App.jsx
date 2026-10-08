@@ -1,51 +1,54 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useState } from 'react'
+import { Link, Route, Routes } from 'react-router-dom'
+import serverIcon from './assets/server-svgrepo-com.svg'
+import NotFoundPage from './pages/404Page.jsx'
+import ProfileSettingsPage from './pages/ProfileSettingsPage.jsx'
+import ServerPage from './pages/ServerPage.jsx'
+import ServerSettingsPage from './pages/ServerSettingsPage.jsx'
+import StartUpPage from './pages/StartUpPage.jsx'
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const [microphoneEnabled, setMicrophoneEnabled] = useState(true)
+  const [headphonesEnabled, setHeadphonesEnabled] = useState(true)
+  const [activeDmView, setActiveDmView] = useState('users')
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="app-shell">
+      <nav className="ServerNavBar" aria-label="Main navigation">
+        <Link
+          className="server-nav-home"
+          to="/"
+          aria-label="Go to startup page"
+          title="Startup"
+        >
+          <img src={serverIcon} alt="" />
+        </Link>
+        <div className="server-nav-divider" aria-hidden="true" />
+      </nav>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
-  );
+      <main className="page-content">
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <StartUpPage
+                microphoneEnabled={microphoneEnabled}
+                headphonesEnabled={headphonesEnabled}
+                activeDmView={activeDmView}
+                onToggleMicrophone={() => setMicrophoneEnabled((enabled) => !enabled)}
+                onToggleHeadphones={() => setHeadphonesEnabled((enabled) => !enabled)}
+                onChangeDmView={setActiveDmView}
+              />
+            }
+          />
+          <Route path="/server" element={<ServerPage />} />
+          <Route path="/profile-settings" element={<ProfileSettingsPage />} />
+          <Route path="/server-settings" element={<ServerSettingsPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </main>
+    </div>
+  )
 }
 
-export default App;
+export default App

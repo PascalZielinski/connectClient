@@ -1,0 +1,68 @@
+:root {
+  --font-main: 'Roboto', 'Open Sans', 'Lato', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+}
+
+html,
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-main);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #252a33;
+  color: #f7f5f0;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #424852;
+}
+
+.app-navigation a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-navigation a[aria-current='page'] {
+  color: #91c8ff;
+}
+
+.page-content {
+  min-height: 100vh;
+  margin-left: var(--server-bar-width, 72px);
+  padding: 2rem 1.5rem;
+}
+
+.page {
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+.page a {
+  color: #91c8ff;
+}
+
+.app-loading {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: #252a33;
+  color: #f7f5f0;
+}
