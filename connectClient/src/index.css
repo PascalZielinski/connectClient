@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --font-main: 'Roboto', 'Open Sans', 'Lato', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
 }
 
@@ -19,35 +20,18 @@ body,
 }
 
 body {
-  background: #252a33;
-  color: #f7f5f0;
+  background: #111315;
+  color: #f2f3f5;
 }
 
 .app-shell {
   min-height: 100vh;
 }
 
-.app-navigation {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid #424852;
-}
-
-.app-navigation a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.app-navigation a[aria-current='page'] {
-  color: #91c8ff;
-}
-
 .page-content {
   min-height: 100vh;
   margin-left: var(--server-bar-width, 72px);
-  padding: 2rem 1.5rem;
+  padding: 0;
 }
 
 .page {
@@ -56,13 +40,32 @@ body {
 }
 
 .page a {
-  color: #91c8ff;
+  color: #d8dadd;
 }
 
 .app-loading {
   display: grid;
   min-height: 100vh;
   place-items: center;
-  background: #252a33;
-  color: #f7f5f0;
+  background: #111315;
+  color: #f2f3f5;
+}
+
+.app-loading-error {
+  align-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: #ffb0a8;
+  text-align: center;
+}
+
+.app-loading-error button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid #4b5058;
+  border-radius: 8px;
+  background: #202328;
+  color: #e0e2e5;
+  font: inherit;
+  cursor: pointer;
 }
