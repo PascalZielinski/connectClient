@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { apiPost, apiRequest, clearTokens, getTokens, saveTokens } from '../api/client.js'
+import { apiPost, apiRequest, clearTokens, getTokens, refreshSession, saveTokens } from '../api/client.js'
 import { serverList } from '../api/servers.js'
 
 const AuthContext = createContext(null)
@@ -9,12 +9,19 @@ export function AuthProvider({ children }) {
   const [servers, setServers] = useState([])
   const [status, setStatus] = useState('checking')
   const [error, setError] = useState('')
+  const [serversError, setServersError] = useState('')
 
   const loadServers = useCallback(async () => {
-    const data = await apiRequest('/me/servers')
-    const ownServers = serverList(data)
-    setServers(ownServers)
-    return ownServers
+    setServersError('')
+    try {
+      const data = await apiRequest('/me/servers')
+      const ownServers = serverList(data)
+      setServers(ownServers)
+      return ownServers
+    } catch (loadError) {
+      setServersError(loadError.message || 'Could not load your servers.')
+      throw loadError
+    }
   }, [])
 
   const loadAccount = useCallback(async () => {
@@ -22,7 +29,7 @@ export function AuthProvider({ children }) {
     setUser(account?.user || account)
     setStatus('authenticated')
     setError('')
-    await loadServers()
+    loadServers().catch(() => {})
   }, [loadServers])
 
   useEffect(() => {
@@ -34,18 +41,21 @@ export function AuthProvider({ children }) {
       return undefined
     }
 
-    loadAccount().catch((loadError) => {
-      if (!active) return
-      if (loadError.status === 401) {
+    async function restoreSession() {
+      try {
+        if (!accessToken && refreshToken) await refreshSession()
+        await loadAccount()
+      } catch (loadError) {
+        if (!active) return
         clearTokens()
         setUser(null)
         setServers([])
         setStatus('unauthenticated')
-      } else {
-        setError(loadError.message || 'Could not connect to the server.')
-        setStatus('error')
+        setError(loadError.message || 'Your session has expired. Please sign in again.')
       }
-    })
+    }
+
+    void restoreSession()
 
     return () => {
       active = false
@@ -57,28 +67,45 @@ export function AuthProvider({ children }) {
       setUser(null)
       setServers([])
       setStatus('unauthenticated')
+      setError('')
     }
     window.addEventListener('connect:unauthorized', handleUnauthorized)
     return () => window.removeEventListener('connect:unauthorized', handleUnauthorized)
   }, [])
 
   const authenticate = useCallback(async (endpoint, credentials) => {
-    const tokenResponse = await apiPost(endpoint, credentials)
-    if (!tokenResponse?.token) {
-      throw new Error('The server did not return an access token.')
-    }
-    saveTokens(tokenResponse)
-    const account = tokenResponse.user || await apiRequest('/me')
-    setUser(account?.user || account)
-    setStatus('authenticated')
+    setStatus('checking')
     setError('')
-    await loadServers()
+    setServersError('')
+    try {
+      const tokenResponse = await apiPost(endpoint, credentials, {
+        skipAuth: true,
+        skipRefresh: true,
+      })
+      if (!tokenResponse?.token || !tokenResponse?.refresh_token) {
+        throw new Error('The server did not return both access and refresh tokens.')
+      }
+      saveTokens(tokenResponse)
+      const account = await apiRequest('/me')
+      setUser(account?.user || account)
+      setStatus('authenticated')
+      setError('')
+      loadServers().catch(() => {})
+    } catch (authError) {
+      clearTokens()
+      setUser(null)
+      setServers([])
+      setStatus('unauthenticated')
+      throw authError
+    }
   }, [loadServers])
 
   const logout = useCallback(() => {
     clearTokens()
     setUser(null)
     setServers([])
+    setServersError('')
+    setError('')
     setStatus('unauthenticated')
   }, [])
 
@@ -87,23 +114,33 @@ export function AuthProvider({ children }) {
     return updatedServers
   }, [loadServers])
 
+  const retry = useCallback(async () => {
+    setStatus('checking')
+    setError('')
+    try {
+      const { accessToken, refreshToken } = getTokens()
+      if (!accessToken && refreshToken) await refreshSession()
+      await loadAccount()
+    } catch (loadError) {
+      clearTokens()
+      setUser(null)
+      setServers([])
+      setStatus('unauthenticated')
+      setError(loadError.message || 'Your session has expired. Please sign in again.')
+    }
+  }, [loadAccount])
+
   const value = useMemo(() => ({
     user,
     servers,
     status,
     error,
+    serversError,
     authenticate,
     logout,
     refreshServers,
-    retry: () => {
-      setStatus('checking')
-      setError('')
-      loadAccount().catch((loadError) => {
-        setError(loadError.message || 'Could not connect to the server.')
-        setStatus(loadError.status === 401 ? 'unauthenticated' : 'error')
-      })
-    },
-  }), [user, servers, status, error, authenticate, logout, refreshServers, loadAccount])
+    retry,
+  }), [user, servers, status, error, serversError, authenticate, logout, refreshServers, retry])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

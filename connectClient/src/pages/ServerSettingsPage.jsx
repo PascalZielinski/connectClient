@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiRequest } from '../api/client.js'
-import { serverName, unwrapServer } from '../api/servers.js'
 import { useAuth } from '../auth/AuthContext.jsx'
+import { serverName, unwrapServer } from '../api/servers.js'
 import './ServerPage.css'
 
 function ServerSettingsPage() {

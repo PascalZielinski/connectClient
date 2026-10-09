@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiPost, apiRequest } from '../api/client.js'
 import { serverName, unwrapServer } from '../api/servers.js'
@@ -19,12 +19,33 @@ function normalizeMessage(message) {
   const timestampValue = value.timestamp || value.created_at || value.createdAt
   const parsedTimestamp = timestampValue ? new Date(timestampValue) : null
   return {
+    id: value.id,
     uuid: value.uuid || value.message_uuid,
     content: value.content || '',
     authorName: value.author_name || value.authorName || author.display_name || author.name || 'User',
     authorUuid: value.author_uuid || author.uuid,
     timestamp: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp : null,
   }
+}
+
+function messageNumericId(message) {
+  const id = Number(message.id)
+  return Number.isSafeInteger(id) && id > 0 ? id : 0
+}
+
+function mergeMessages(current, incoming) {
+  const existingIds = new Set(current.map(messageNumericId).filter(Boolean))
+  const existingUuids = new Set(current.map((message) => message.uuid).filter(Boolean))
+  return [
+    ...current,
+    ...incoming.filter((message) => {
+      const id = messageNumericId(message)
+      if ((id && existingIds.has(id)) || (message.uuid && existingUuids.has(message.uuid))) return false
+      if (id) existingIds.add(id)
+      if (message.uuid) existingUuids.add(message.uuid)
+      return true
+    }),
+  ]
 }
 
 function ServerPage() {
@@ -45,7 +66,9 @@ function ServerPage() {
   const [editChannelName, setEditChannelName] = useState('')
   const [editChannelType, setEditChannelType] = useState('text')
   const [messages, setMessages] = useState([])
+  const [pollError, setPollError] = useState('')
   const [messagesLoading, setMessagesLoading] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasOlderMessages, setHasOlderMessages] = useState(false)
   const [messagesError, setMessagesError] = useState('')
@@ -54,6 +77,7 @@ function ServerPage() {
   const [editingMessageUuid, setEditingMessageUuid] = useState('')
   const [editMessageContent, setEditMessageContent] = useState('')
   const [savingMessageEdit, setSavingMessageEdit] = useState(false)
+  const newestMessageId = useRef(0)
 
   const loadServer = useCallback(async () => {
     setLoading(true)
@@ -118,14 +142,19 @@ function ServerPage() {
   useEffect(() => {
     if (!activeChannel || activeChannel.type !== 'text') {
       setMessages([])
+      setHistoryLoaded(false)
+      newestMessageId.current = 0
       setHasOlderMessages(false)
       setMessagesError('')
+      setPollError('')
       setEditingMessageUuid('')
       return undefined
     }
 
     if (!activeChannelUuid) {
       setMessages([])
+      setHistoryLoaded(false)
+      newestMessageId.current = 0
       setHasOlderMessages(false)
       setMessagesError('This channel response does not include a channel UUID, so its messages cannot be loaded.')
       return undefined
@@ -133,9 +162,12 @@ function ServerPage() {
 
     const controller = new AbortController()
     setMessages([])
+    setHistoryLoaded(false)
+    newestMessageId.current = 0
     setMessagesLoading(true)
     setHasOlderMessages(false)
     setMessagesError('')
+    setPollError('')
     setEditingMessageUuid('')
     apiRequest(`/channels/${encodeURIComponent(activeChannelUuid)}/messages?limit=50`, {
       signal: controller.signal,
@@ -144,6 +176,11 @@ function ServerPage() {
         if (controller.signal.aborted) return
         const loaded = collection(data, 'messages').map(normalizeMessage)
         setMessages(loaded)
+        newestMessageId.current = loaded.reduce(
+          (newestId, message) => Math.max(newestId, messageNumericId(message)),
+          0,
+        )
+        setHistoryLoaded(true)
         setHasOlderMessages(Boolean(data?.has_more || data?.hasMore || data?.next_before) || loaded.length === 50)
       })
       .catch((loadError) => {
@@ -157,6 +194,45 @@ function ServerPage() {
 
     return () => controller.abort()
   }, [activeChannel, activeChannelUuid])
+
+  useEffect(() => {
+    if (!activeChannelUuid || !historyLoaded || activeChannel?.type !== 'text') return undefined
+
+    const controller = new AbortController()
+    let polling = false
+    const pollMessages = async () => {
+      if (polling) return
+      polling = true
+      try {
+        const data = await apiRequest(
+          `/channels/${encodeURIComponent(activeChannelUuid)}/messages/after/${newestMessageId.current}`,
+          { signal: controller.signal },
+        )
+        if (controller.signal.aborted) return
+        const received = collection(data, 'messages').map(normalizeMessage)
+        if (received.length) {
+          newestMessageId.current = received.reduce(
+            (newestId, message) => Math.max(newestId, messageNumericId(message)),
+            newestMessageId.current,
+          )
+          setMessages((current) => mergeMessages(current, received))
+        }
+        setPollError('')
+      } catch (loadError) {
+        if (!controller.signal.aborted) {
+          setPollError(loadError.message || 'Could not check for new messages.')
+        }
+      } finally {
+        polling = false
+      }
+    }
+
+    const interval = window.setInterval(pollMessages, 3000)
+    return () => {
+      controller.abort()
+      window.clearInterval(interval)
+    }
+  }, [activeChannel, activeChannelUuid, historyLoaded])
 
   function openChannelMenu(event) {
     if (!canManageChannels) return
@@ -296,6 +372,7 @@ function ServerPage() {
         { content },
       )
       const createdMessage = normalizeMessage(result)
+      newestMessageId.current = Math.max(newestMessageId.current, messageNumericId(createdMessage))
       setMessages((current) => {
         if (createdMessage.uuid && current.some((message) => message.uuid === createdMessage.uuid)) return current
         return [...current, createdMessage]
@@ -435,7 +512,9 @@ function ServerPage() {
         </header>
 
         {error && <p className="server-workspace-error" role="alert">{error}</p>}
-        {messagesError && <p className="server-workspace-error" role="alert">{messagesError}</p>}
+        {(messagesError || pollError) && (
+          <p className="server-workspace-error" role="alert">{messagesError || pollError}</p>
+        )}
 
         {!activeChannel ? (
           <div className="server-blank-canvas" aria-label="Server workspace">

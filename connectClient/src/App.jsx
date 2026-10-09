@@ -3,6 +3,7 @@ import { Link, Navigate, NavLink, Route, Routes, useNavigate } from 'react-route
 import serverIcon from './assets/server-svgrepo-com.svg'
 import { apiPost } from './api/client.js'
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx'
+import { serverInitial, serverName, serverUuid, unwrapServer } from './api/servers.js'
 import AuthPage from './pages/AuthPage.jsx'
 import NotFoundPage from './pages/404Page.jsx'
 import ProfileSettingsPage from './pages/ProfileSettingsPage.jsx'
@@ -10,7 +11,6 @@ import ServerPage from './pages/ServerPage.jsx'
 import ServerSettingsPage from './pages/ServerSettingsPage.jsx'
 import StartUpPage from './pages/StartUpPage.jsx'
 import CreateServerDialog from './pages/CreateServerDialog.jsx'
-import { serverInitial, serverName, serverUuid, unwrapServer } from './api/servers.js'
 import headphonesIcon from './assets/headphone-music-svgrepo-com.svg'
 import headphonesMutedIcon from './assets/headphone-slash.svg'
 import microphoneIcon from './assets/microphone-svgrepo-com.svg'
@@ -30,8 +30,15 @@ function AuthenticatedApp() {
   const [headphonesEnabled, setHeadphonesEnabled] = useState(true)
   const [activeDmView, setActiveDmView] = useState('users')
   const [createServerOpen, setCreateServerOpen] = useState(false)
-  const { servers, status, error, retry, refreshServers, user, logout } = useAuth()
+  const { servers, status, error, serversError, retry, refreshServers, user, logout } = useAuth()
   const navigate = useNavigate()
+  const retryServerLoading = async () => {
+    try {
+      await refreshServers()
+    } catch {
+      // AuthContext exposes the failure through serversError.
+    }
+  }
 
   if (status === 'checking') {
     return <div className="app-loading" role="status">Connecting to Connect…</div>
@@ -117,6 +124,12 @@ function AuthenticatedApp() {
       </nav>
 
       <main className="page-content">
+        {serversError && (
+          <div className="app-server-error" role="alert">
+            <span>{serversError}</span>
+            <button type="button" onClick={retryServerLoading}>Retry</button>
+          </div>
+        )}
         <Routes>
           <Route
             path="/"

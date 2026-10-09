@@ -5,7 +5,7 @@ import './AuthPage.css'
 
 function AuthPage({ mode }) {
   const isRegister = mode === 'register'
-  const { authenticate, status } = useAuth()
+  const { authenticate, error: authError, status } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -87,7 +87,7 @@ function AuthPage({ mode }) {
               />
             </>
           )}
-          {error && <p className="auth-error" role="alert">{error}</p>}
+          {(error || authError) && <p className="auth-error" role="alert">{error || authError}</p>}
           <button className="auth-submit" type="submit" disabled={submitting}>
             {submitting ? 'Please wait…' : isRegister ? 'Create account' : 'Sign in'}
           </button>
