@@ -2,10 +2,21 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiRequest } from '../api/client.js'
 import { useAuth } from '../auth/AuthContext.jsx'
+import { useVoice } from '../voice/VoiceContext.jsx'
 import './ServerPage.css'
 
 function ProfileSettingsPage() {
   const { logout } = useAuth()
+  const {
+    inputDevices,
+    outputDevices,
+    inputDeviceId,
+    outputDeviceId,
+    deviceError,
+    selectInputDevice,
+    selectOutputDevice,
+    requestDeviceAccess,
+  } = useVoice()
   const [profile, setProfile] = useState(null)
   const [form, setForm] = useState({ display_name: '', bio: '' })
   const [loading, setLoading] = useState(true)
@@ -84,6 +95,42 @@ function ProfileSettingsPage() {
         />
         <label htmlFor="profile-bio">Bio</label>
         <textarea id="profile-bio" name="bio" value={form.bio} onChange={updateField} rows={5} maxLength={500} />
+        <label htmlFor="audio-input-device">Input device</label>
+        <select
+          id="audio-input-device"
+          value={inputDeviceId}
+          onChange={(event) => void selectInputDevice(event.target.value)}
+        >
+          <option value="">System default</option>
+          {inputDeviceId && !inputDevices.some((device) => device.deviceId === inputDeviceId) && (
+            <option value={inputDeviceId}>Saved microphone unavailable</option>
+          )}
+          {inputDevices.map((device, index) => (
+            <option key={device.deviceId || `input-${index}`} value={device.deviceId}>
+              {device.label || `Microphone ${index + 1}`}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="audio-output-device">Output device</label>
+        <select
+          id="audio-output-device"
+          value={outputDeviceId}
+          onChange={(event) => void selectOutputDevice(event.target.value)}
+        >
+          <option value="">System default</option>
+          {outputDeviceId && !outputDevices.some((device) => device.deviceId === outputDeviceId) && (
+            <option value={outputDeviceId}>Saved output unavailable</option>
+          )}
+          {outputDevices.map((device, index) => (
+            <option key={device.deviceId || `output-${index}`} value={device.deviceId}>
+              {device.label || `Output ${index + 1}`}
+            </option>
+          ))}
+        </select>
+        <button className="subtle-button" type="button" onClick={() => void requestDeviceAccess()}>
+          Allow microphone access and refresh devices
+        </button>
+        {deviceError && <p className="server-error" role="alert">{deviceError}</p>}
         <div className="settings-actions">
           <button className="primary-button" type="submit" disabled={saving}>
             {saving ? 'Saving…' : profile ? 'Save profile' : 'Create profile'}

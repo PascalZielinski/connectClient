@@ -3,6 +3,7 @@ import { Link, Navigate, NavLink, Route, Routes, useNavigate } from 'react-route
 import serverIcon from './assets/server-svgrepo-com.svg'
 import { apiPost } from './api/client.js'
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx'
+import { VoiceProvider, useVoice } from './voice/VoiceContext.jsx'
 import { serverInitial, serverName, serverUuid, unwrapServer } from './api/servers.js'
 import AuthPage from './pages/AuthPage.jsx'
 import NotFoundPage from './pages/404Page.jsx'
@@ -20,17 +21,27 @@ import settingsIcon from './assets/settings-svgrepo-com.svg'
 function App() {
   return (
     <AuthProvider>
-      <AuthenticatedApp />
+      <VoiceProvider>
+        <AuthenticatedApp />
+      </VoiceProvider>
     </AuthProvider>
   )
 }
 
 function AuthenticatedApp() {
-  const [microphoneEnabled, setMicrophoneEnabled] = useState(true)
-  const [headphonesEnabled, setHeadphonesEnabled] = useState(true)
   const [activeDmView, setActiveDmView] = useState('users')
   const [createServerOpen, setCreateServerOpen] = useState(false)
   const { servers, status, error, serversError, retry, refreshServers, user, logout } = useAuth()
+  const {
+    microphoneEnabled,
+    microphoneBusy,
+    microphoneActive,
+    outputEnabled,
+    voiceStatus,
+    setAudioContainerElement,
+    toggleMicrophone,
+    toggleOutput,
+  } = useVoice()
   const navigate = useNavigate()
   const retryServerLoading = async () => {
     try {
@@ -156,24 +167,27 @@ function AuthenticatedApp() {
         </div>
         <div className="profile-audio-controls">
           <button
-            className="profile-icon-button"
+            className={`profile-icon-button${microphoneActive ? ' is-speaking' : ''}`}
             type="button"
             aria-label={microphoneEnabled ? 'Mute microphone' : 'Unmute microphone'}
             aria-pressed={!microphoneEnabled}
-            onClick={() => setMicrophoneEnabled((enabled) => !enabled)}
+            title={microphoneActive ? 'Microphone is picking up audio' : 'Toggle microphone'}
+            disabled={microphoneBusy || voiceStatus === 'connecting'}
+            onClick={() => void toggleMicrophone()}
           >
             <img src={microphoneEnabled ? microphoneIcon : microphoneMutedIcon} alt="" />
           </button>
           <button
             className="profile-icon-button"
             type="button"
-            aria-label={headphonesEnabled ? 'Mute headphones' : 'Unmute headphones'}
-            aria-pressed={!headphonesEnabled}
-            onClick={() => setHeadphonesEnabled((enabled) => !enabled)}
+            aria-label={outputEnabled ? 'Mute headphones' : 'Unmute headphones'}
+            aria-pressed={!outputEnabled}
+            onClick={toggleOutput}
           >
-            <img src={headphonesEnabled ? headphonesIcon : headphonesMutedIcon} alt="" />
+            <img src={outputEnabled ? headphonesIcon : headphonesMutedIcon} alt="" />
           </button>
         </div>
+        <div className="voice-audio-container" ref={setAudioContainerElement} aria-hidden="true" />
         <Link
           className="profile-icon-button profile-settings-button"
           to="/profile-settings"

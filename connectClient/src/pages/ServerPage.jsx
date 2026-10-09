@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiPost, apiRequest } from '../api/client.js'
 import { serverName, unwrapServer } from '../api/servers.js'
 import { useAuth } from '../auth/AuthContext.jsx'
+import { useVoice } from '../voice/VoiceContext.jsx'
 import './ServerPage.css'
 
 function collection(data, key) {
@@ -48,10 +49,39 @@ function mergeMessages(current, incoming) {
   ]
 }
 
+function VoiceParticipant({ name, avatarUrl, isCurrentUser, isSpeaking = false }) {
+  const [avatarFailed, setAvatarFailed] = useState(false)
+
+  return (
+    <li className={`voice-participant${isSpeaking ? ' is-speaking' : ''}`}>
+      <span className="voice-participant-avatar">
+        {avatarUrl && !avatarFailed ? (
+          <img src={avatarUrl} alt="" onError={() => setAvatarFailed(true)} />
+        ) : (
+          name.charAt(0).toUpperCase()
+        )}
+      </span>
+      <span className="voice-participant-name">{name}</span>
+      {isCurrentUser && <span className="voice-participant-you">You</span>}
+    </li>
+  )
+}
+
 function ServerPage() {
   const { uuid, channelId } = useParams()
   const navigate = useNavigate()
   const { user, refreshServers } = useAuth()
+  const {
+    participants: voiceParticipants,
+    status: voiceStatus,
+    error: voiceError,
+    microphoneEnabled,
+    microphoneBusy,
+    microphoneActive,
+    joinVoice,
+    leaveVoice,
+    toggleMicrophone,
+  } = useVoice()
   const [server, setServer] = useState(null)
   const [channels, setChannels] = useState([])
   const [members, setMembers] = useState([])
@@ -133,6 +163,15 @@ function ServerPage() {
   )
   const activeChannelUuid = activeChannel?.uuid || activeChannel?.channel_uuid
   const settings = server?.settings || server || {}
+
+  useEffect(() => {
+    if (activeChannel?.type === 'voice' && activeChannelUuid) {
+      void joinVoice(activeChannelUuid)
+    } else {
+      leaveVoice()
+    }
+    return leaveVoice
+  }, [activeChannel?.type, activeChannelUuid, joinVoice, leaveVoice])
 
   const channelGroups = useMemo(() => ({
     text: channels.filter((channel) => channel.type === 'text'),
@@ -430,6 +469,24 @@ function ServerPage() {
     }
   }
 
+  function voiceParticipantDetails(identity) {
+    const member = members.find((item) =>
+      (item.user_uuid || item.user?.uuid || item.uuid) === identity,
+    )
+    const profile = member?.user?.profile || member?.profile || member?.user || member || {}
+    const currentProfile = user?.profile || user || {}
+    const isCurrentUser = identity === user?.uuid
+    const participantProfile = isCurrentUser ? { ...profile, ...currentProfile } : profile
+
+    return {
+      name: participantProfile.display_name || participantProfile.displayName
+        || member?.display_name || (isCurrentUser ? user?.email : '') || 'User',
+      avatarUrl: participantProfile.avatar_url || participantProfile.avatarUrl
+        || participantProfile.profile_image || participantProfile.avatar || '',
+      isCurrentUser,
+    }
+  }
+
   if (loading) return <section className="server-page"><p className="server-loading">Loading server…</p></section>
   if (error && !server) {
     return (
@@ -521,9 +578,54 @@ function ServerPage() {
             {!channels.length && <p>No channels yet.</p>}
           </div>
         ) : activeChannel.type === 'voice' ? (
-          <div className="server-blank-canvas">
-            <p>Voice channel</p>
-          </div>
+          <section className="voice-channel" aria-label={`${activeChannel.name} voice channel`}>
+            <div className="voice-controls">
+              <p className={`voice-connection-status is-${voiceStatus}`} role="status">
+                {voiceStatus === 'connecting' ? 'Connecting…'
+                  : voiceStatus === 'connected' ? 'Connected'
+                    : voiceStatus === 'error' ? 'Connection failed'
+                      : 'Not connected'}
+              </p>
+              {voiceStatus === 'connected' ? (
+                <div className="voice-control-actions">
+                  <button type="button" onClick={toggleMicrophone} disabled={microphoneBusy}>
+                    {microphoneBusy ? 'Updating…' : microphoneEnabled ? 'Mute microphone' : 'Unmute microphone'}
+                  </button>
+                  <button className="voice-leave-button" type="button" onClick={leaveVoice}>Leave voice</button>
+                </div>
+              ) : voiceStatus !== 'connecting' ? (
+                <button type="button" onClick={() => void joinVoice(activeChannelUuid)}>
+                  {voiceStatus === 'error' ? 'Try again' : 'Join voice'}
+                </button>
+              ) : null}
+            </div>
+            {voiceError && <p className="voice-error" role="alert">{voiceError}</p>}
+            <section className="voice-participant-section" aria-label="People in this call">
+              <h2>In this call</h2>
+              {voiceParticipants.length === 0 && voiceStatus !== 'connected' ? (
+                <p className="voice-empty">Join the call to see its participants.</p>
+              ) : (
+                <ul className="voice-participant-list">
+                  {voiceStatus === 'connected' && user?.uuid && (
+                    <VoiceParticipant
+                      key={user.uuid}
+                      {...voiceParticipantDetails(user.uuid)}
+                      isSpeaking={microphoneActive}
+                    />
+                  )}
+                  {voiceParticipants.map((identity) => (
+                    <VoiceParticipant
+                      key={identity}
+                      {...voiceParticipantDetails(identity)}
+                    />
+                  ))}
+                  {voiceStatus === 'connected' && voiceParticipants.length === 0 && !user?.uuid && (
+                    <li className="voice-empty">You are the only person in this call.</li>
+                  )}
+                </ul>
+              )}
+            </section>
+          </section>
         ) : (
           <>
             <div className="chat-history" aria-live="polite">

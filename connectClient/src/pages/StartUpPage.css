@@ -587,6 +587,7 @@ body {
 }
 
 .profile-icon-button {
+  position: relative;
   display: grid;
   width: 30px;
   height: 34px;
@@ -616,6 +617,23 @@ body {
 
 .profile-icon-button:hover {
   background: #34363a;
+}
+
+.profile-icon-button.is-speaking::after {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--bg-profile);
+  border-radius: 50%;
+  background: #71d28b;
+  content: '';
+}
+
+.profile-icon-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .profile-icon-button img {
