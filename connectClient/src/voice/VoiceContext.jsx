@@ -1,10 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { apiRequest } from '../api/client.js'
+import muteNotification from '../assets/sounds/universfield-new-notification-035-485894.mp3'
+import callNotification from '../assets/sounds/universfield-system-notification-02-352442.mp3'
 
 const VoiceContext = createContext(null)
 const INPUT_DEVICE_KEY = 'connect.audioInputDevice'
 const OUTPUT_DEVICE_KEY = 'connect.audioOutputDevice'
 const OUTPUT_ENABLED_KEY = 'connect.audioOutputEnabled'
+const AUDIO_SETTINGS_KEY = 'connect.audioSettings'
 
 function storedValue(key, fallback = '') {
   try {
@@ -14,25 +17,56 @@ function storedValue(key, fallback = '') {
   }
 }
 
+function storedHeadphoneVolume() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(AUDIO_SETTINGS_KEY) || '{}')
+    return typeof settings.headVol === 'number'
+      ? Math.min(1, Math.max(0, settings.headVol))
+      : 1
+  } catch {
+    return 1
+  }
+}
+
+function storedNoiseSuppression() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(AUDIO_SETTINGS_KEY) || '{}')
+    return typeof settings.noiseSuppression === 'boolean' ? settings.noiseSuppression : true
+  } catch {
+    return true
+  }
+}
+
 export function VoiceProvider({ children }) {
   const roomRef = useRef(null)
   const cleanupAudioRef = useRef(() => {})
   const requestIdRef = useRef(0)
   const audioContainerRef = useRef(null)
+  const muteNotificationRef = useRef(null)
+  const voiceConnectedRef = useRef(false)
   const [participants, setParticipants] = useState([])
   const [status, setStatus] = useState('disconnected')
   const [error, setError] = useState('')
-  const [microphoneEnabled, setMicrophoneEnabled] = useState(true)
+  const [outputEnabled, setOutputEnabled] = useState(() => storedValue(OUTPUT_ENABLED_KEY, 'true') !== 'false')
+  const [microphoneEnabled, setMicrophoneEnabled] = useState(() => storedValue(OUTPUT_ENABLED_KEY, 'true') !== 'false')
   const [microphoneBusy, setMicrophoneBusy] = useState(false)
   const [microphoneActive, setMicrophoneActive] = useState(false)
-  const [outputEnabled, setOutputEnabled] = useState(() => storedValue(OUTPUT_ENABLED_KEY, 'true') !== 'false')
+  const [headphoneVolume, setHeadphoneVolumeState] = useState(storedHeadphoneVolume)
+  const [noiseSuppression, setNoiseSuppressionState] = useState(storedNoiseSuppression)
   const [inputDevices, setInputDevices] = useState([])
   const [outputDevices, setOutputDevices] = useState([])
   const [inputDeviceId, setInputDeviceId] = useState(() => storedValue(INPUT_DEVICE_KEY))
   const [outputDeviceId, setOutputDeviceId] = useState(() => storedValue(OUTPUT_DEVICE_KEY))
   const [deviceError, setDeviceError] = useState('')
   const preferencesRef = useRef(null)
-  preferencesRef.current = { inputDeviceId, microphoneEnabled, outputDeviceId, outputEnabled }
+  preferencesRef.current = {
+    inputDeviceId,
+    microphoneEnabled,
+    noiseSuppression,
+    outputDeviceId,
+    outputEnabled,
+    headphoneVolume,
+  }
   const setAudioContainerElement = useCallback((element) => {
     audioContainerRef.current = element
   }, [])
@@ -75,13 +109,23 @@ export function VoiceProvider({ children }) {
     }
   }, [refreshDevices])
 
+  const playCallNotification = useCallback(() => {
+    const audio = new Audio(callNotification)
+    audio.play().catch((playError) => {
+      setError(playError.message || 'Could not play the voice call notification.')
+    })
+  }, [])
+
   const joinVoice = useCallback(async (channelUuid) => {
     const requestId = ++requestIdRef.current
     const previousRoom = roomRef.current
+    const wasConnected = voiceConnectedRef.current
+    voiceConnectedRef.current = false
     roomRef.current = null
     cleanupAudioRef.current()
     cleanupAudioRef.current = () => {}
     previousRoom?.disconnect()
+    if (wasConnected) playCallNotification()
     setParticipants([])
     setMicrophoneActive(false)
     setStatus('connecting')
@@ -99,9 +143,19 @@ export function VoiceProvider({ children }) {
     const updateParticipants = () => {
       setParticipants(Array.from(nextRoom.remoteParticipants.values(), (participant) => participant.identity))
     }
+    const participantConnected = () => {
+      updateParticipants()
+      playCallNotification()
+    }
+    const participantDisconnected = () => {
+      updateParticipants()
+      playCallNotification()
+    }
     const attachAudio = (track, publication, participant) => {
       if (track.kind !== 'audio') return
-      participant.setVolume(preferencesRef.current.outputEnabled ? 1 : 0)
+      participant.setVolume(
+        preferencesRef.current.outputEnabled ? preferencesRef.current.headphoneVolume : 0,
+      )
       const element = track.attach()
       element.autoplay = true
       audioContainerRef.current?.appendChild(element)
@@ -115,11 +169,14 @@ export function VoiceProvider({ children }) {
     }
     const disconnected = () => {
       if (requestId !== requestIdRef.current) return
+      const wasVoiceConnected = voiceConnectedRef.current
+      voiceConnectedRef.current = false
       cleanupAudioRef.current()
       roomRef.current = null
       setParticipants([])
       setMicrophoneActive(false)
       setStatus('disconnected')
+      if (wasVoiceConnected) playCallNotification()
     }
 
     try {
@@ -137,13 +194,18 @@ export function VoiceProvider({ children }) {
       if (requestId !== requestIdRef.current) return
 
       events = livekit.RoomEvent
-      nextRoom = new livekit.Room()
+      nextRoom = new livekit.Room({
+        audioCaptureDefaults: {
+          noiseSuppression: preferencesRef.current.noiseSuppression,
+          voiceIsolation: false,
+        },
+      })
       roomRef.current = nextRoom
       nextRoom
         .on(events.TrackSubscribed, attachAudio)
         .on(events.TrackUnsubscribed, detachAudio)
-        .on(events.ParticipantConnected, updateParticipants)
-        .on(events.ParticipantDisconnected, updateParticipants)
+        .on(events.ParticipantConnected, participantConnected)
+        .on(events.ParticipantDisconnected, participantDisconnected)
         .on(events.ActiveSpeakersChanged, updateActiveSpeakers)
         .on(events.Disconnected, disconnected)
 
@@ -170,7 +232,9 @@ export function VoiceProvider({ children }) {
       }
       await nextRoom.localParticipant.setMicrophoneEnabled(micEnabled)
       if (requestId === requestIdRef.current) {
+        voiceConnectedRef.current = true
         setStatus('connected')
+        playCallNotification()
         await refreshDevices()
       }
     } catch (connectError) {
@@ -178,8 +242,8 @@ export function VoiceProvider({ children }) {
       if (nextRoom) {
         nextRoom.off(events.TrackSubscribed, attachAudio)
         nextRoom.off(events.TrackUnsubscribed, detachAudio)
-        nextRoom.off(events.ParticipantConnected, updateParticipants)
-        nextRoom.off(events.ParticipantDisconnected, updateParticipants)
+        nextRoom.off(events.ParticipantConnected, participantConnected)
+        nextRoom.off(events.ParticipantDisconnected, participantDisconnected)
         nextRoom.off(events.ActiveSpeakersChanged, updateActiveSpeakers)
         nextRoom.off(events.Disconnected, disconnected)
         attachedTracks.forEach(detachAudio)
@@ -189,9 +253,11 @@ export function VoiceProvider({ children }) {
       setStatus('error')
       setError(connectError.message || 'Could not connect to the voice channel.')
     }
-  }, [refreshDevices])
+  }, [refreshDevices, playCallNotification])
 
   const leaveVoice = useCallback(() => {
+    const wasConnected = voiceConnectedRef.current
+    voiceConnectedRef.current = false
     requestIdRef.current += 1
     const currentRoom = roomRef.current
     roomRef.current = null
@@ -202,41 +268,93 @@ export function VoiceProvider({ children }) {
     setMicrophoneActive(false)
     setMicrophoneBusy(false)
     setStatus('disconnected')
+    if (wasConnected) playCallNotification()
+  }, [playCallNotification])
+
+  const updateMicrophoneEnabled = useCallback((enabled) => {
+    setMicrophoneEnabled(enabled)
+    preferencesRef.current = { ...preferencesRef.current, microphoneEnabled: enabled }
+    if (!enabled) setMicrophoneActive(false)
   }, [])
 
-  const toggleMicrophone = useCallback(async () => {
-    const nextEnabled = !microphoneEnabled
+  const applyMicrophoneEnabled = useCallback(async (enabled) => {
     const currentRoom = roomRef.current
     if (!currentRoom) {
-      setMicrophoneEnabled(nextEnabled)
-      return
+      updateMicrophoneEnabled(enabled)
+      return true
     }
     setMicrophoneBusy(true)
     setError('')
     try {
-      await currentRoom.localParticipant.setMicrophoneEnabled(nextEnabled)
-      setMicrophoneEnabled(nextEnabled)
-      if (!nextEnabled) setMicrophoneActive(false)
+      await currentRoom.localParticipant.setMicrophoneEnabled(enabled)
+      updateMicrophoneEnabled(enabled)
+      return true
     } catch (microphoneError) {
       setError(microphoneError.message || 'Could not change microphone settings.')
+      return false
     } finally {
       setMicrophoneBusy(false)
     }
-  }, [microphoneEnabled])
+  }, [updateMicrophoneEnabled])
 
-  const toggleOutput = useCallback(() => {
-    setOutputEnabled((enabled) => {
-      const nextEnabled = !enabled
-      try {
-        localStorage.setItem(OUTPUT_ENABLED_KEY, String(nextEnabled))
-      } catch (storageError) {
-        setDeviceError(storageError.message || 'Could not save audio output settings.')
-      }
-      roomRef.current?.remoteParticipants.forEach((participant) => {
-        participant.setVolume(nextEnabled ? 1 : 0)
-      })
-      return nextEnabled
+  const updateOutputEnabled = useCallback((enabled) => {
+    setOutputEnabled(enabled)
+    preferencesRef.current = { ...preferencesRef.current, outputEnabled: enabled }
+    try {
+      localStorage.setItem(OUTPUT_ENABLED_KEY, String(enabled))
+    } catch (storageError) {
+      setDeviceError(storageError.message || 'Could not save audio output settings.')
+    }
+    roomRef.current?.remoteParticipants.forEach((participant) => {
+      participant.setVolume(enabled ? preferencesRef.current.headphoneVolume : 0)
     })
+  }, [])
+
+  const playMuteNotification = useCallback(() => {
+    if (!muteNotificationRef.current) muteNotificationRef.current = new Audio(muteNotification)
+    muteNotificationRef.current.currentTime = 0
+    muteNotificationRef.current.play().catch((playError) => {
+      setError(playError.message || 'Could not play the audio notification.')
+    })
+  }, [])
+
+  const toggleMicrophone = useCallback(async () => {
+    const nextEnabled = !microphoneEnabled
+    if (!await applyMicrophoneEnabled(nextEnabled)) return
+    if (nextEnabled && !outputEnabled) updateOutputEnabled(true)
+    playMuteNotification()
+  }, [microphoneEnabled, outputEnabled, applyMicrophoneEnabled, updateOutputEnabled, playMuteNotification])
+
+  const toggleOutput = useCallback(async () => {
+    const nextEnabled = !outputEnabled
+    if (!await applyMicrophoneEnabled(nextEnabled)) return
+    updateOutputEnabled(nextEnabled)
+    playMuteNotification()
+  }, [outputEnabled, applyMicrophoneEnabled, updateOutputEnabled, playMuteNotification])
+
+  const setHeadphoneVolume = useCallback((volume) => {
+    const nextVolume = Math.min(1, Math.max(0, volume))
+    setHeadphoneVolumeState(nextVolume)
+    roomRef.current?.remoteParticipants.forEach((participant) => {
+      participant.setVolume(preferencesRef.current.outputEnabled ? nextVolume : 0)
+    })
+  }, [])
+
+  const setNoiseSuppression = useCallback(async (enabled) => {
+    preferencesRef.current = { ...preferencesRef.current, noiseSuppression: enabled }
+    setNoiseSuppressionState(enabled)
+    const microphoneTrack = roomRef.current
+      ?.localParticipant
+      .getTrackPublication('microphone')
+      ?.track
+      ?.mediaStreamTrack
+    if (!microphoneTrack) return
+    try {
+      await microphoneTrack.applyConstraints({ noiseSuppression: enabled, voiceIsolation: false })
+    } catch (suppressionError) {
+      setDeviceError(suppressionError.message || 'Could not change noise suppression.')
+      throw suppressionError
+    }
   }, [])
 
   const selectInputDevice = useCallback(async (deviceId) => {
@@ -269,6 +387,8 @@ export function VoiceProvider({ children }) {
     microphoneBusy,
     microphoneActive,
     outputEnabled,
+    headphoneVolume,
+    noiseSuppression,
     inputDevices,
     outputDevices,
     inputDeviceId,
@@ -279,14 +399,18 @@ export function VoiceProvider({ children }) {
     leaveVoice,
     toggleMicrophone,
     toggleOutput,
+    setHeadphoneVolume,
+    setNoiseSuppression,
     selectInputDevice,
     selectOutputDevice,
     refreshDevices,
     requestDeviceAccess,
   }), [
     participants, status, error, microphoneEnabled, microphoneBusy, microphoneActive, outputEnabled,
+    headphoneVolume, noiseSuppression,
     inputDevices, outputDevices, inputDeviceId, outputDeviceId, deviceError, setAudioContainerElement,
-    joinVoice, leaveVoice, toggleMicrophone, toggleOutput, selectInputDevice, selectOutputDevice,
+    joinVoice, leaveVoice, toggleMicrophone, toggleOutput, setHeadphoneVolume, setNoiseSuppression,
+    selectInputDevice, selectOutputDevice,
     refreshDevices, requestDeviceAccess,
   ])
 

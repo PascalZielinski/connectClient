@@ -35,8 +35,9 @@ export function clearTokens() {
   localStorage.removeItem(REFRESH_TOKEN_KEY)
 }
 
-async function readResponse(response) {
+async function readResponse(response, responseType) {
   if (response.status === 204) return null
+  if (response.ok && responseType === 'blob') return response.blob()
   const text = await response.text()
   if (!text) return null
 
@@ -103,9 +104,10 @@ export async function refreshSession() {
 }
 
 export async function apiRequest(path, options = {}) {
-  const { skipAuth = false, skipRefresh = false, ...fetchOptions } = options
+  const { skipAuth = false, skipRefresh = false, responseType, ...fetchOptions } = options
   const headers = new Headers(fetchOptions.headers || {})
-  if (fetchOptions.body !== undefined && !headers.has('Content-Type')) {
+  const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData
+  if (fetchOptions.body !== undefined && !isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
 
@@ -118,14 +120,14 @@ export async function apiRequest(path, options = {}) {
   }
 
   let response = await fetch(url, { ...fetchOptions, headers })
-  let body = await readResponse(response)
+  let body = await readResponse(response, responseType)
 
   if (response.status === 401 && !skipAuth && !skipRefresh) {
     try {
       const refreshedToken = await refreshAccessToken()
       headers.set('Authorization', `Bearer ${refreshedToken}`)
       response = await fetch(url, { ...fetchOptions, headers })
-      body = await readResponse(response)
+      body = await readResponse(response, responseType)
     } catch (refreshError) {
       clearTokens()
       notifyUnauthorized()

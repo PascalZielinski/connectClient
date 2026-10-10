@@ -19,10 +19,55 @@ function normalizeMessage(message) {
   const author = value.author || {}
   const timestampValue = value.timestamp || value.created_at || value.createdAt
   const parsedTimestamp = timestampValue ? new Date(timestampValue) : null
+  const attachmentValue = value.attachments ?? value.files ?? value.attachment ?? value.file
+    ?? (
+      value.attachment_uuid || value.attachmentUuid || value.attachment_id || value.attachmentId
+        || value.file_uuid || value.fileUuid || value.file_id || value.fileId
+        || value.original_name || value.originalName || value.filename || value.file_name || value.fileName
+        ? value
+        : null
+    )
+
+  const attachmentValues = Array.isArray(attachmentValue)
+    ? attachmentValue
+    : attachmentValue ? [attachmentValue] : []
+
+  const attachments = attachmentValues.map((item) => {
+    const attachment = typeof item === 'string'
+      ? { uuid: item }
+      : item?.attachment || item
+
+    const mediaType = attachment?.media_type
+      || attachment?.mediaType
+      || attachment?.mime_type
+      || attachment?.mimeType
+      || attachment?.content_type
+      || attachment?.contentType
+      || attachment?.type
+      || ''
+
+    return {
+      uuid: attachment?.uuid || attachment?.attachment_uuid || attachment?.attachmentUuid
+        || attachment?.attachment_id || attachment?.attachmentId || attachment?.file_uuid
+        || attachment?.fileUuid || attachment?.file_id || attachment?.fileId || attachment?.id,
+
+      name: attachment?.original_name || attachment?.originalName || attachment?.original_filename
+        || attachment?.originalFilename || attachment?.original_file_name || attachment?.filename
+        || attachment?.file_name || attachment?.fileName || attachment?.name || 'Download attachment',
+
+      downloadUrl: attachment?.download_url || attachment?.downloadUrl || null,
+
+      mimeType: mediaType,
+
+      isImage: attachment?.image === true
+        || String(mediaType).startsWith('image/'),
+    }
+  })
   return {
     id: value.id,
     uuid: value.uuid || value.message_uuid,
     content: value.content || '',
+    attachments,
     authorName: value.author_name || value.authorName || author.display_name || author.name || 'User',
     authorUuid: value.author_uuid || author.uuid,
     timestamp: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp : null,
@@ -47,6 +92,44 @@ function mergeMessages(current, incoming) {
       return true
     }),
   ]
+}
+
+function attachmentPath(channelUuid, attachment) {
+  if (attachment.downloadUrl) return attachment.downloadUrl.replace(/^\/api(?=\/)/, '')
+  return `/channels/${encodeURIComponent(channelUuid)}/messages/attachments/${encodeURIComponent(attachment.uuid)}`
+}
+
+function AttachmentImage({ channelUuid, attachment }) {
+  const [src, setSrc] = useState('')
+  const [failed, setFailed] = useState(false)
+  const path = attachmentPath(channelUuid, attachment)
+
+  useEffect(() => {
+    let objectUrl = ''
+    let cancelled = false
+    setSrc('')
+    setFailed(false)
+
+    apiRequest(path, { responseType: 'blob' })
+      .then((blob) => {
+        if (cancelled) return
+        if (!(blob instanceof Blob)) throw new Error('No blob')
+        objectUrl = URL.createObjectURL(blob)
+        setSrc(objectUrl)
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [path])
+
+  if (failed) return <span className="chat-message-unavailable">Bild nicht mehr verfügbar (Anhänge laufen nach 24h ab)</span>
+  if (!src) return <span className="chat-message-unavailable">Lädt…</span>
+  return <img className="chat-message-image" src={src} alt={attachment.name} />
 }
 
 function VoiceParticipant({ name, avatarUrl, isCurrentUser, isSpeaking = false }) {
@@ -104,9 +187,13 @@ function ServerPage() {
   const [messagesError, setMessagesError] = useState('')
   const [messageInput, setMessageInput] = useState('')
   const [sendingMessage, setSendingMessage] = useState(false)
+  const [attachedFile, setAttachedFile] = useState(null)
+  const [isFileDragOver, setIsFileDragOver] = useState(false)
   const [editingMessageUuid, setEditingMessageUuid] = useState('')
   const [editMessageContent, setEditMessageContent] = useState('')
   const [savingMessageEdit, setSavingMessageEdit] = useState(false)
+  const [downloadingAttachmentUuid, setDownloadingAttachmentUuid] = useState('')
+  const fileInput = useRef(null)
   const newestMessageId = useRef(0)
 
   const loadServer = useCallback(async () => {
@@ -208,6 +295,8 @@ function ServerPage() {
     setMessagesError('')
     setPollError('')
     setEditingMessageUuid('')
+    setAttachedFile(null)
+    setIsFileDragOver(false)
     apiRequest(`/channels/${encodeURIComponent(activeChannelUuid)}/messages?limit=50`, {
       signal: controller.signal,
     })
@@ -402,26 +491,78 @@ function ServerPage() {
   async function handleSendMessage(event) {
     event.preventDefault()
     const content = messageInput.trim()
-    if (!content || !activeChannelUuid || sendingMessage) return
+    if ((!content && !attachedFile) || !activeChannelUuid || sendingMessage) return
     setSendingMessage(true)
     setMessagesError('')
     try {
-      const result = await apiPost(
-        `/channels/${encodeURIComponent(activeChannelUuid)}/messages`,
-        { content },
-      )
-      const createdMessage = normalizeMessage(result)
+      const path = `/channels/${encodeURIComponent(activeChannelUuid)}/messages`
+      let result
+      if (attachedFile) {
+        const formData = new FormData()
+        formData.append('file', attachedFile)
+        if (content) formData.append('content', content)
+        result = await apiRequest(path, { method: 'POST', body: formData })
+      } else {
+        result = await apiPost(path, { content })
+      }
+      let createdMessage = normalizeMessage(result)
+      if (attachedFile && !createdMessage.attachments.length) {
+        try {
+          const data = await apiRequest(
+            `/channels/${encodeURIComponent(activeChannelUuid)}/messages?limit=50`,
+          )
+          const refreshedMessages = collection(data, 'messages').map(normalizeMessage)
+          const savedMessage = refreshedMessages.find((message) => (
+            (createdMessage.uuid && message.uuid === createdMessage.uuid)
+            || (messageNumericId(createdMessage) && messageNumericId(message) === messageNumericId(createdMessage))
+          ))
+          if (savedMessage) createdMessage = savedMessage
+        } catch (refreshError) {
+          setMessagesError(`Message sent, but attachment details could not be loaded: ${refreshError.message || 'Request failed.'}`)
+        }
+        if (!createdMessage.attachments.length) {
+          createdMessage = {
+            ...createdMessage,
+            attachments: [{ name: attachedFile.name }],
+          }
+        }
+      }
       newestMessageId.current = Math.max(newestMessageId.current, messageNumericId(createdMessage))
       setMessages((current) => {
         if (createdMessage.uuid && current.some((message) => message.uuid === createdMessage.uuid)) return current
         return [...current, createdMessage]
       })
       setMessageInput('')
+      setAttachedFile(null)
     } catch (sendError) {
       setMessagesError(sendError.message || 'Could not send your message.')
     } finally {
       setSendingMessage(false)
     }
+  }
+
+  function selectDroppedFiles(files) {
+    if (!files?.length) return
+    if (files.length > 1) {
+      setMessagesError('Only one file can be attached to a message.')
+      return
+    }
+    setMessagesError('')
+    setAttachedFile(files[0])
+  }
+
+  function handleFileDragOver(event) {
+    if (!Array.from(event.dataTransfer.types || []).includes('Files')) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    setIsFileDragOver(true)
+  }
+
+  function handleFileDrop(event) {
+    if (!Array.from(event.dataTransfer.types || []).includes('Files')) return
+    event.preventDefault()
+    setIsFileDragOver(false)
+    selectDroppedFiles(event.dataTransfer.files)
   }
 
   function beginEditMessage(message) {
@@ -468,6 +609,31 @@ function ServerPage() {
       setMessagesError(requestError.message || 'Could not delete your message.')
     }
   }
+
+async function handleDownloadAttachment(attachment) {
+    if (!activeChannelUuid || !attachment.uuid || downloadingAttachmentUuid) return
+    setDownloadingAttachmentUuid(attachment.uuid)
+    setMessagesError('')
+    try {
+      const blob = await apiRequest(
+        attachmentPath(activeChannelUuid, attachment),
+        { responseType: 'blob' },
+      )
+      if (!(blob instanceof Blob)) throw new Error('The server did not return an attachment.')
+      const downloadUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = attachment.name
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000)
+    } catch (downloadError) {
+      setMessagesError(downloadError.message || 'Could not download the attachment.')
+    } finally {
+      setDownloadingAttachmentUuid('')
+    }
+}
 
   function voiceParticipantDetails(identity) {
     const member = members.find((item) =>
@@ -588,7 +754,7 @@ function ServerPage() {
               </p>
               {voiceStatus === 'connected' ? (
                 <div className="voice-control-actions">
-                  <button type="button" onClick={toggleMicrophone} disabled={microphoneBusy}>
+                  <button type="button" onClick={toggleMicrophone} disabled={microphoneBusy || voiceStatus === 'connecting'}>
                     {microphoneBusy ? 'Updating…' : microphoneEnabled ? 'Mute microphone' : 'Unmute microphone'}
                   </button>
                   <button className="voice-leave-button" type="button" onClick={leaveVoice}>Leave voice</button>
@@ -628,7 +794,16 @@ function ServerPage() {
           </section>
         ) : (
           <>
-            <div className="chat-history" aria-live="polite">
+            <div
+              className="chat-content"
+              onDragEnter={handleFileDragOver}
+              onDragOver={handleFileDragOver}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setIsFileDragOver(false)
+              }}
+              onDrop={handleFileDrop}
+            >
+              <div className="chat-history" aria-live="polite">
               {hasOlderMessages && (
                 <button
                   className="chat-load-older"
@@ -685,26 +860,82 @@ function ServerPage() {
                             </div>
                           </form>
                         ) : (
-                          <p>{message.content}</p>
+                          <>
+                            {message.content && <p>{message.content}</p>}
+                            {message.attachments.map((attachment, index) => (
+                              <div className="chat-message-attachment" key={attachment.uuid || `${attachment.name}-${index}`}>
+                                {attachment.isImage && attachment.uuid && (
+                                  <AttachmentImage channelUuid={activeChannelUuid} attachment={attachment} />
+                                )}
+                                <span title={attachment.name}>{attachment.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDownloadAttachment(attachment)}
+                                  disabled={!attachment.uuid || Boolean(downloadingAttachmentUuid)}
+                                  aria-label={`Download ${attachment.name}`}
+                                  title={attachment.uuid ? `Download ${attachment.name}` : 'Attachment ID is unavailable'}
+                                >
+                                  {downloadingAttachmentUuid === attachment.uuid ? 'Downloading…' : 'Download'}
+                                </button>
+                              </div>
+                            ))}
+                            {!message.content && message.attachments.length === 0 && (
+                              <p className="chat-message-unavailable">No message text or attachment details were returned.</p>
+                            )}
+                          </>
                         )}
                       </div>
                     </article>
                   )
                 })
               )}
+              </div>
+              {attachedFile && (
+                <div className="chat-attachment-preview">
+                  <span title={attachedFile.name}>Attached: {attachedFile.name}</span>
+                  <button type="button" onClick={() => setAttachedFile(null)} disabled={sendingMessage}>
+                    Remove
+                  </button>
+                </div>
+              )}
+              <form className="chat-composer" onSubmit={handleSendMessage}>
+                <input
+                  ref={fileInput}
+                  className="chat-file-input"
+                  type="file"
+                  aria-label="Choose a file to attach"
+                  onChange={(event) => {
+                    selectDroppedFiles(event.target.files)
+                    event.target.value = ''
+                  }}
+                />
+                <button
+                  className="chat-attach-button"
+                  type="button"
+                  aria-label="Attach a file"
+                  title="Attach a file"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={sendingMessage}
+                >
+                  Attach
+                </button>
+                <input
+                  aria-label={`Message ${activeChannel.name}`}
+                  placeholder={`Message #${activeChannel.name}`}
+                  value={messageInput}
+                  maxLength={4000}
+                  onChange={(event) => setMessageInput(event.target.value)}
+                />
+                <button type="submit" disabled={(!messageInput.trim() && !attachedFile) || sendingMessage || !activeChannelUuid}>
+                  {sendingMessage ? 'Sending…' : 'Send'}
+                </button>
+              </form>
+              {isFileDragOver && (
+                <div className="chat-drop-overlay" aria-hidden="true">
+                  <span>Drop a file to attach it</span>
+                </div>
+              )}
             </div>
-            <form className="chat-composer" onSubmit={handleSendMessage}>
-              <input
-                aria-label={`Message ${activeChannel.name}`}
-                placeholder={`Message #${activeChannel.name}`}
-                value={messageInput}
-                maxLength={4000}
-                onChange={(event) => setMessageInput(event.target.value)}
-              />
-              <button type="submit" disabled={!messageInput.trim() || sendingMessage || !activeChannelUuid}>
-                {sendingMessage ? 'Sending…' : 'Send'}
-              </button>
-            </form>
           </>
         )}
       </main>

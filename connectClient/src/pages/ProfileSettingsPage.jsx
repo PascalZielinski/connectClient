@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { VoiceControls } from '../api/audio.js'
 import { apiRequest } from '../api/client.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { useVoice } from '../voice/VoiceContext.jsx'
 import './ServerPage.css'
 
 function ProfileSettingsPage() {
+  const microphoneControlsRef = useRef(null)
+  const voiceControlsRef = useRef(null)
+  const headphoneControlsRef = useRef(null)
   const { logout } = useAuth()
   const {
     inputDevices,
@@ -15,6 +19,8 @@ function ProfileSettingsPage() {
     deviceError,
     selectInputDevice,
     selectOutputDevice,
+    setHeadphoneVolume,
+    setNoiseSuppression,
     requestDeviceAccess,
   } = useVoice()
   const [profile, setProfile] = useState(null)
@@ -23,6 +29,29 @@ function ProfileSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [feedback, setFeedback] = useState('')
+  const [microphoneReady, setMicrophoneReady] = useState(false)
+  const [monitoring, setMonitoring] = useState(false)
+  const [monitorError, setMonitorError] = useState('')
+
+  useEffect(() => {
+    if (loading || !microphoneControlsRef.current || !headphoneControlsRef.current) return undefined
+    const controls = new VoiceControls(microphoneControlsRef.current, {
+      deviceId: inputDeviceId || undefined,
+      headphoneContainer: headphoneControlsRef.current,
+      onHeadphoneVolumeChange: setHeadphoneVolume,
+      onNoiseSuppressionChange: setNoiseSuppression,
+      onStream: () => setMicrophoneReady(true),
+      storageKey: 'connect.audioSettings',
+    })
+    voiceControlsRef.current = controls
+    return () => {
+      void controls.setMonitoring(false)
+      controls.destroy()
+      voiceControlsRef.current = null
+      setMicrophoneReady(false)
+      setMonitoring(false)
+    }
+  }, [loading, inputDeviceId, setHeadphoneVolume, setNoiseSuppression])
 
   useEffect(() => {
     let active = true
@@ -75,6 +104,19 @@ function ProfileSettingsPage() {
     }
   }
 
+  async function toggleMicrophoneMonitor() {
+    const nextMonitoring = !monitoring
+    const controls = voiceControlsRef.current
+    setMonitorError('')
+    try {
+      await controls?.setMonitoring(nextMonitoring)
+      if (voiceControlsRef.current !== controls) return
+      setMonitoring(nextMonitoring)
+    } catch (monitorError) {
+      setMonitorError(monitorError.message || 'Could not play the microphone audio.')
+    }
+  }
+
   if (loading) return <section className="server-page"><p className="server-loading">Loading your profile…</p></section>
 
   return (
@@ -111,6 +153,16 @@ function ProfileSettingsPage() {
             </option>
           ))}
         </select>
+        <div ref={microphoneControlsRef} />
+        <button
+          className="subtle-button"
+          type="button"
+          onClick={() => void toggleMicrophoneMonitor()}
+          disabled={!microphoneReady}
+        >
+          {monitoring ? 'Stop hearing yourself' : 'Hear yourself'}
+        </button>
+        {monitorError && <p className="server-error" role="alert">{monitorError}</p>}
         <label htmlFor="audio-output-device">Output device</label>
         <select
           id="audio-output-device"
@@ -127,6 +179,7 @@ function ProfileSettingsPage() {
             </option>
           ))}
         </select>
+        <div ref={headphoneControlsRef} />
         <button className="subtle-button" type="button" onClick={() => void requestDeviceAccess()}>
           Allow microphone access and refresh devices
         </button>

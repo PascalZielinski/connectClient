@@ -182,6 +182,7 @@ function AuthenticatedApp() {
             type="button"
             aria-label={outputEnabled ? 'Mute headphones' : 'Unmute headphones'}
             aria-pressed={!outputEnabled}
+            disabled={microphoneBusy || voiceStatus === 'connecting'}
             onClick={toggleOutput}
           >
             <img src={outputEnabled ? headphonesIcon : headphonesMutedIcon} alt="" />

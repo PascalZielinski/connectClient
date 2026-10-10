@@ -87,3 +87,31 @@ test('a refresh token can restore a session without an access token', async () =
     refreshToken: 'restored-refresh',
   })
 })
+
+test('multipart requests preserve FormData so fetch can set its boundary', async () => {
+  useMemoryStorage()
+  const formData = new FormData()
+  formData.append('content', 'A file')
+  formData.append('file', new Blob(['contents']), 'file.txt')
+  let requestOptions
+  globalThis.fetch = async (_url, options) => {
+    requestOptions = options
+    return Response.json({ uuid: 'message-1' })
+  }
+
+  await apiRequest('/channels/channel-1/messages', { method: 'POST', body: formData })
+
+  assert.equal(requestOptions.body, formData)
+  assert.equal(new Headers(requestOptions.headers).has('Content-Type'), false)
+})
+
+test('blob requests return the download body', async () => {
+  useMemoryStorage()
+  globalThis.fetch = async () => new Response('downloaded contents', { status: 200 })
+
+  const result = await apiRequest('/channels/channel-1/attachments/attachment-1', {
+    responseType: 'blob',
+  })
+
+  assert.equal(await result.text(), 'downloaded contents')
+})
