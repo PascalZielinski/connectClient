@@ -1202,6 +1202,22 @@
   cursor: pointer;
 }
 
+.voice-participant-live {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 8px; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; color: #fff;
+}
+.voice-participant-live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #ed4245; box-shadow: 0 0 6px rgba(237, 66, 69, 0.8);
+}
+.voice-participant-join-live {
+  margin-left: auto; padding: 4px 10px; border: 0; border-radius: 4px;
+  background: #ed4245; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.voice-participant-join-live:disabled { opacity: 0.6; cursor: default; }
+.screen-share video { width: 100%; object-fit: contain; background: #000; }
+
 @media (max-width: 760px) {
   .server-hero {
     align-items: flex-start;

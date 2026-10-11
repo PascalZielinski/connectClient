@@ -37,6 +37,12 @@ function storedNoiseSuppression() {
   }
 }
 
+// setVolume wirkt standardmäßig nur auf das Mikrofon, der Stream-Ton ist eine eigene Quelle
+function applyVolume(participant, volume) {
+  participant.setVolume(volume)
+  participant.setVolume(volume, 'screen_share_audio')
+}
+
 export function VoiceProvider({ children }) {
   const roomRef = useRef(null)
   const cleanupAudioRef = useRef(() => {})
@@ -47,6 +53,8 @@ export function VoiceProvider({ children }) {
   const [participants, setParticipants] = useState([])
   const [status, setStatus] = useState('disconnected')
   const [error, setError] = useState('')
+  const [screenShares, setScreenShares] = useState([])
+  const [isSharing, setIsSharing] = useState(false)
   const [outputEnabled, setOutputEnabled] = useState(() => storedValue(OUTPUT_ENABLED_KEY, 'true') !== 'false')
   const [microphoneEnabled, setMicrophoneEnabled] = useState(() => storedValue(OUTPUT_ENABLED_KEY, 'true') !== 'false')
   const [microphoneBusy, setMicrophoneBusy] = useState(false)
@@ -127,6 +135,8 @@ export function VoiceProvider({ children }) {
     previousRoom?.disconnect()
     if (wasConnected) playCallNotification()
     setParticipants([])
+    setScreenShares([])
+    setIsSharing(false)
     setMicrophoneActive(false)
     setStatus('connecting')
     setError('')
@@ -153,13 +163,35 @@ export function VoiceProvider({ children }) {
     }
     const attachAudio = (track, publication, participant) => {
       if (track.kind !== 'audio') return
-      participant.setVolume(
+      applyVolume(
+        participant,
         preferencesRef.current.outputEnabled ? preferencesRef.current.headphoneVolume : 0,
       )
       const element = track.attach()
       element.autoplay = true
       audioContainerRef.current?.appendChild(element)
       attachedTracks.add(track)
+    }
+    const trackSubscribed = (track, publication, participant) => {
+      if (track.kind === 'video') {
+        if (track.source !== 'screen_share') return
+        setScreenShares((prev) => [
+          ...prev.filter((share) => share.sid !== track.sid),
+          { sid: track.sid, track, identity: participant.identity, name: participant.name },
+        ])
+        return
+      }
+      attachAudio(track, publication, participant)
+    }
+    const trackUnsubscribed = (track) => {
+      if (track.kind === 'video') {
+        setScreenShares((prev) => prev.filter((share) => share.sid !== track.sid))
+        return
+      }
+      detachAudio(track)
+    }
+    const updateLocalShareState = () => {
+      setIsSharing(nextRoom?.localParticipant.isScreenShareEnabled ?? false)
     }
     const updateActiveSpeakers = (speakers) => {
       setMicrophoneActive(
@@ -174,6 +206,8 @@ export function VoiceProvider({ children }) {
       cleanupAudioRef.current()
       roomRef.current = null
       setParticipants([])
+      setScreenShares([])
+      setIsSharing(false)
       setMicrophoneActive(false)
       setStatus('disconnected')
       if (wasVoiceConnected) playCallNotification()
@@ -202,11 +236,13 @@ export function VoiceProvider({ children }) {
       })
       roomRef.current = nextRoom
       nextRoom
-        .on(events.TrackSubscribed, attachAudio)
-        .on(events.TrackUnsubscribed, detachAudio)
+        .on(events.TrackSubscribed, trackSubscribed)
+        .on(events.TrackUnsubscribed, trackUnsubscribed)
         .on(events.ParticipantConnected, participantConnected)
         .on(events.ParticipantDisconnected, participantDisconnected)
         .on(events.ActiveSpeakersChanged, updateActiveSpeakers)
+        .on(events.LocalTrackPublished, updateLocalShareState)
+        .on(events.LocalTrackUnpublished, updateLocalShareState)
         .on(events.Disconnected, disconnected)
 
       await nextRoom.connect(credentials.url, credentials.token)
@@ -240,16 +276,20 @@ export function VoiceProvider({ children }) {
     } catch (connectError) {
       if (requestId !== requestIdRef.current) return
       if (nextRoom) {
-        nextRoom.off(events.TrackSubscribed, attachAudio)
-        nextRoom.off(events.TrackUnsubscribed, detachAudio)
+        nextRoom.off(events.TrackSubscribed, trackSubscribed)
+        nextRoom.off(events.TrackUnsubscribed, trackUnsubscribed)
         nextRoom.off(events.ParticipantConnected, participantConnected)
         nextRoom.off(events.ParticipantDisconnected, participantDisconnected)
         nextRoom.off(events.ActiveSpeakersChanged, updateActiveSpeakers)
+        nextRoom.off(events.LocalTrackPublished, updateLocalShareState)
+        nextRoom.off(events.LocalTrackUnpublished, updateLocalShareState)
         nextRoom.off(events.Disconnected, disconnected)
         attachedTracks.forEach(detachAudio)
         nextRoom.disconnect()
         if (roomRef.current === nextRoom) roomRef.current = null
       }
+      setScreenShares([])
+      setIsSharing(false)
       setStatus('error')
       setError(connectError.message || 'Could not connect to the voice channel.')
     }
@@ -265,11 +305,35 @@ export function VoiceProvider({ children }) {
     cleanupAudioRef.current = () => {}
     currentRoom?.disconnect()
     setParticipants([])
+    setScreenShares([])
+    setIsSharing(false)
     setMicrophoneActive(false)
     setMicrophoneBusy(false)
     setStatus('disconnected')
     if (wasConnected) playCallNotification()
   }, [playCallNotification])
+
+  const startScreenShare = useCallback(async ({ resolution, audio } = {}) => {
+    const currentRoom = roomRef.current
+    if (!currentRoom) return
+    setError('')
+    try {
+      await currentRoom.localParticipant.setScreenShareEnabled(true, { audio, resolution })
+    } catch (shareError) {
+      // NotAllowedError = Picker abgebrochen, kein echter Fehler
+      if (shareError?.name !== 'NotAllowedError') {
+        setError(shareError.message || 'Could not start screen share.')
+      }
+    }
+  }, [])
+
+  const stopScreenShare = useCallback(async () => {
+    try {
+      await roomRef.current?.localParticipant.setScreenShareEnabled(false)
+    } catch (shareError) {
+      setError(shareError.message || 'Could not stop screen share.')
+    }
+  }, [])
 
   const updateMicrophoneEnabled = useCallback((enabled) => {
     setMicrophoneEnabled(enabled)
@@ -306,7 +370,7 @@ export function VoiceProvider({ children }) {
       setDeviceError(storageError.message || 'Could not save audio output settings.')
     }
     roomRef.current?.remoteParticipants.forEach((participant) => {
-      participant.setVolume(enabled ? preferencesRef.current.headphoneVolume : 0)
+      applyVolume(participant, enabled ? preferencesRef.current.headphoneVolume : 0)
     })
   }, [])
 
@@ -336,7 +400,7 @@ export function VoiceProvider({ children }) {
     const nextVolume = Math.min(1, Math.max(0, volume))
     setHeadphoneVolumeState(nextVolume)
     roomRef.current?.remoteParticipants.forEach((participant) => {
-      participant.setVolume(preferencesRef.current.outputEnabled ? nextVolume : 0)
+      applyVolume(participant, preferencesRef.current.outputEnabled ? nextVolume : 0)
     })
   }, [])
 
@@ -383,6 +447,8 @@ export function VoiceProvider({ children }) {
     participants,
     status,
     error,
+    screenShares,
+    isSharing,
     microphoneEnabled,
     microphoneBusy,
     microphoneActive,
@@ -397,6 +463,8 @@ export function VoiceProvider({ children }) {
     setAudioContainerElement,
     joinVoice,
     leaveVoice,
+    startScreenShare,
+    stopScreenShare,
     toggleMicrophone,
     toggleOutput,
     setHeadphoneVolume,
@@ -406,10 +474,12 @@ export function VoiceProvider({ children }) {
     refreshDevices,
     requestDeviceAccess,
   }), [
-    participants, status, error, microphoneEnabled, microphoneBusy, microphoneActive, outputEnabled,
+    participants, status, error, screenShares, isSharing,
+    microphoneEnabled, microphoneBusy, microphoneActive, outputEnabled,
     headphoneVolume, noiseSuppression,
     inputDevices, outputDevices, inputDeviceId, outputDeviceId, deviceError, setAudioContainerElement,
-    joinVoice, leaveVoice, toggleMicrophone, toggleOutput, setHeadphoneVolume, setNoiseSuppression,
+    joinVoice, leaveVoice, startScreenShare, stopScreenShare,
+    toggleMicrophone, toggleOutput, setHeadphoneVolume, setNoiseSuppression,
     selectInputDevice, selectOutputDevice,
     refreshDevices, requestDeviceAccess,
   ])

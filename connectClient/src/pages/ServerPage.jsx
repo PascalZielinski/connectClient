@@ -132,7 +132,10 @@ function AttachmentImage({ channelUuid, attachment }) {
   return <img className="chat-message-image" src={src} alt={attachment.name} />
 }
 
-function VoiceParticipant({ name, avatarUrl, isCurrentUser, isSpeaking = false }) {
+function VoiceParticipant({
+  name, avatarUrl, isCurrentUser, isSpeaking = false,
+  isLive = false, isWatching = false, onJoinLive,
+}) {
   const [avatarFailed, setAvatarFailed] = useState(false)
 
   return (
@@ -146,8 +149,34 @@ function VoiceParticipant({ name, avatarUrl, isCurrentUser, isSpeaking = false }
       </span>
       <span className="voice-participant-name">{name}</span>
       {isCurrentUser && <span className="voice-participant-you">You</span>}
+      {isLive && (
+        <span className="voice-participant-live">
+          <span className="voice-participant-live-dot" aria-hidden="true" />
+          Live
+        </span>
+      )}
+      {isLive && !isCurrentUser && (
+        <button
+          type="button"
+          className="voice-participant-join-live"
+          disabled={isWatching}
+          onClick={onJoinLive}
+        >
+          {isWatching ? 'Du schaust zu' : 'Live beitreten'}
+        </button>
+      )}
     </li>
   )
+}
+
+function ScreenShareView({ track }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const element = ref.current
+    track.attach(element)
+    return () => { track.detach(element) }
+  }, [track])
+  return <video ref={ref} autoPlay playsInline muted />
 }
 
 function ServerPage() {
@@ -193,6 +222,9 @@ function ServerPage() {
   const [editMessageContent, setEditMessageContent] = useState('')
   const [savingMessageEdit, setSavingMessageEdit] = useState(false)
   const [downloadingAttachmentUuid, setDownloadingAttachmentUuid] = useState('')
+  const { screenShares, isSharing } = useVoice() // zu deinem bestehenden Destructuring dazu
+  const [watchedIdentity, setWatchedIdentity] = useState(null)
+  const watchedShare = screenShares.find((share) => share.identity === watchedIdentity)
   const fileInput = useRef(null)
   const newestMessageId = useRef(0)
 
@@ -643,6 +675,7 @@ async function handleDownloadAttachment(attachment) {
     const currentProfile = user?.profile || user || {}
     const isCurrentUser = identity === user?.uuid
     const participantProfile = isCurrentUser ? { ...profile, ...currentProfile } : profile
+    
 
     return {
       name: participantProfile.display_name || participantProfile.displayName
@@ -765,30 +798,65 @@ async function handleDownloadAttachment(attachment) {
                 </button>
               ) : null}
             </div>
-            {voiceError && <p className="voice-error" role="alert">{voiceError}</p>}
-            <section className="voice-participant-section" aria-label="People in this call">
+            {voiceError && (
+              <p className="voice-error" role="alert">
+                {voiceError}
+              </p>
+            )}
+
+            <section
+              className="voice-participant-section"
+              aria-label="People in this call"
+            >
               <h2>In this call</h2>
-              {voiceParticipants.length === 0 && voiceStatus !== 'connected' ? (
-                <p className="voice-empty">Join the call to see its participants.</p>
+
+              {voiceParticipants.length === 0 && voiceStatus !== "connected" ? (
+                <p className="voice-empty">
+                  Join the call to see its participants.
+                </p>
               ) : (
                 <ul className="voice-participant-list">
-                  {voiceStatus === 'connected' && user?.uuid && (
+                  {voiceStatus === "connected" && user?.uuid && (
                     <VoiceParticipant
                       key={user.uuid}
                       {...voiceParticipantDetails(user.uuid)}
                       isSpeaking={microphoneActive}
+                      isLive={isSharing}
                     />
                   )}
+
                   {voiceParticipants.map((identity) => (
                     <VoiceParticipant
                       key={identity}
                       {...voiceParticipantDetails(identity)}
+                      isLive={screenShares.some(
+                        (share) => share.identity === identity
+                      )}
+                      isWatching={watchedShare?.identity === identity}
+                      onJoinLive={() => setWatchedIdentity(identity)}
                     />
                   ))}
-                  {voiceStatus === 'connected' && voiceParticipants.length === 0 && !user?.uuid && (
-                    <li className="voice-empty">You are the only person in this call.</li>
-                  )}
+
+                  {voiceStatus === "connected" &&
+                    voiceParticipants.length === 0 && (
+                      <li className="voice-empty">
+                        You are the only person in this call.
+                      </li>
+                    )}
                 </ul>
+              )}
+
+              {watchedShare && (
+                <div className="screen-share">
+                  <ScreenShareView track={watchedShare.track} />
+
+                  <button
+                    type="button"
+                    onClick={() => setWatchedIdentity(null)}
+                  >
+                    Verlassen
+                  </button>
+                </div>
               )}
             </section>
           </section>

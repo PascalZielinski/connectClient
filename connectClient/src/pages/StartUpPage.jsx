@@ -175,17 +175,27 @@ function StartUpPage({
             ) : userQuery.trim() && searchUsers.length === 0 && !userSearchError ? (
               <p className="empty-state">No users found.</p>
             ) : (
-              <div className="discovery-list user-search-results">
-                {searchUsers.map((result) => (
-                  <article className="discovery-card user-result" key={result.uuid}>
-                    <span className="discovery-avatar">{(result.display_name || '?').charAt(0).toUpperCase()}</span>
-                    <div className="discovery-info">
-                      <h3>{result.display_name || 'User'}</h3>
-                      <p>{result.uuid}</p>
-                    </div>
-                  </article>
-                ))}
-              </div>
+            <div className="discovery-list user-search-results">
+              {searchUsers.map((result) => (
+                <article className="discovery-card user-result" key={result.uuid}>
+                  <button
+                    className="open-dm-button"
+                    onClick={() => openDirectMessage(result)}
+                    type="button"
+                  >
+                    DirectMessage
+                  </button>
+
+                  <span className="discovery-avatar">
+                    {(result.display_name || '?').charAt(0).toUpperCase()}
+                  </span>
+
+                  <div className="discovery-info">
+                    <h3>{result.display_name || 'User'}</h3>
+                  </div>
+                </article>
+              ))}
+            </div>
             )}
           </section>
         ) : (

@@ -18,6 +18,12 @@ import microphoneIcon from './assets/microphone-svgrepo-com.svg'
 import microphoneMutedIcon from './assets/microphone-slash-svgrepo-com.svg'
 import settingsIcon from './assets/settings-svgrepo-com.svg'
 
+const SHARE_PRESETS = {
+  '720p30': { width: 1280, height: 720, frameRate: 30 },
+  '1080p30': { width: 1920, height: 1080, frameRate: 30 },
+  '1080p60': { width: 1920, height: 1080, frameRate: 60 },
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -37,11 +43,19 @@ function AuthenticatedApp() {
     microphoneBusy,
     microphoneActive,
     outputEnabled,
-    voiceStatus,
+    status: voiceStatus,
+    isSharing,
     setAudioContainerElement,
     toggleMicrophone,
     toggleOutput,
+    startScreenShare,
+    stopScreenShare,
   } = useVoice()
+  const inCall = voiceStatus === 'connected'
+  const confirmShare = async () => {
+    setShareDialogOpen(false)
+    await startScreenShare({ resolution: SHARE_PRESETS[shareQuality], audio: shareAudio })
+  }
   const navigate = useNavigate()
   const retryServerLoading = async () => {
     try {
@@ -50,6 +64,10 @@ function AuthenticatedApp() {
       // AuthContext exposes the failure through serversError.
     }
   }
+
+  const [shareDialogOpen, setShareDialogOpen] = useState(false)
+  const [shareQuality, setShareQuality] = useState('1080p30')
+  const [shareAudio, setShareAudio] = useState(true)
 
   if (status === 'checking') {
     return <div className="app-loading" role="status">Connecting to Connect…</div>
@@ -187,6 +205,21 @@ function AuthenticatedApp() {
           >
             <img src={outputEnabled ? headphonesIcon : headphonesMutedIcon} alt="" />
           </button>
+          <button
+            className={`profile-icon-button${isSharing ? ' is-speaking' : ''}`}
+            type="button"
+            aria-label={isSharing ? 'Stop screen share' : 'Share screen'}
+            aria-pressed={isSharing}
+            title={isSharing ? 'Übertragung beenden' : 'Bildschirm teilen'}
+            disabled={!inCall}
+            onClick={() => (isSharing ? void stopScreenShare() : setShareDialogOpen(true))}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="2" y="4" width="20" height="13" rx="2" />
+              <path d="M8 21h8M12 17v4" />
+            </svg>
+          </button>
         </div>
         <div className="voice-audio-container" ref={setAudioContainerElement} aria-hidden="true" />
         <Link
@@ -197,7 +230,35 @@ function AuthenticatedApp() {
         >
           <img src={settingsIcon} alt="" />
         </Link>
+          </div>
+          {shareDialogOpen && (
+      <div className="share-overlay" onClick={() => setShareDialogOpen(false)}>
+        <div className="share-dialog" role="dialog" aria-modal="true"
+            onClick={(e) => e.stopPropagation()}>
+          <h3>Bildschirm teilen</h3>
+
+          <label>
+            Qualität
+            <select value={shareQuality} onChange={(e) => setShareQuality(e.target.value)}>
+              <option value="720p30">720p · 30 FPS</option>
+              <option value="1080p30">1080p · 30 FPS</option>
+              <option value="1080p60">1080p · 60 FPS</option>
+            </select>
+          </label>
+
+          <label>
+            <input type="checkbox" checked={shareAudio}
+                  onChange={(e) => setShareAudio(e.target.checked)} />
+            Systemton mitübertragen
+          </label>
+
+          <div className="share-dialog-actions">
+            <button type="button" onClick={() => setShareDialogOpen(false)}>Abbrechen</button>
+            <button type="button" onClick={() => void confirmShare()}>Weiter</button>
+          </div>
+        </div>
       </div>
+    )}
     </div>
     {createServerDialog}
     </>

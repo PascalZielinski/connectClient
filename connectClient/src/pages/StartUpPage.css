@@ -387,11 +387,29 @@ body {
 }
 
 .user-search-results {
+  width: 100%;
   margin-top: 16px;
 }
 
-.user-result .discovery-info p {
-  margin-bottom: 0;
+.user-search-results .user-result {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 150px;
+}
+
+.user-result .discovery-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-result .open-dm-button {
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
+  flex-shrink: 0;
 }
 
 .section-heading {
@@ -428,6 +446,8 @@ body {
   align-items: center;
   gap: 13px;
   padding: 13px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .discovery-avatar,
@@ -647,6 +667,19 @@ body {
 .profile-settings-button {
   margin-left: auto;
 }
+
+.share-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: grid; place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.share-dialog {
+  display: flex; flex-direction: column; gap: 12px;
+  min-width: 300px; padding: 20px; border-radius: 8px;
+  background: #2b2d31;
+  color: #fff;
+}
+.share-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 @media (max-width: 480px) {
   :root {
