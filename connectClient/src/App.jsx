@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import serverIcon from './assets/server-svgrepo-com.svg'
-import { apiPost } from './api/client.js'
+import { apiPost, apiRequest } from './api/client.js'
 import { AuthProvider, useAuth } from './auth/AuthContext.jsx'
 import { VoiceProvider, useVoice } from './voice/VoiceContext.jsx'
 import { serverInitial, serverName, serverUuid, unwrapServer } from './api/servers.js'
@@ -61,13 +61,48 @@ function AuthenticatedApp() {
     try {
       await refreshServers()
     } catch {
-      // AuthContext exposes the failure through serversError.
+
     }
   }
 
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [shareQuality, setShareQuality] = useState('1080p30')
   const [shareAudio, setShareAudio] = useState(true)
+  const [avatarUrl, setAvatarUrl] = useState(null)
+  const [avatarVersion, setAvatarVersion] = useState(0)
+  const avatarUrlRef = useRef(null)
+
+  useEffect(() => {
+    if (status !== 'authenticated') return undefined
+    let active = true
+
+    apiRequest('/me/profile/image', { responseType: 'blob' })
+      .then((blob) => {
+        if (!active) return
+        if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current)
+        const objectUrl = URL.createObjectURL(blob)
+        avatarUrlRef.current = objectUrl
+        setAvatarUrl(objectUrl)
+      })
+      .catch((imageError) => {
+        if (!active || imageError.status !== 404) return
+        if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current)
+        avatarUrlRef.current = null
+        setAvatarUrl(null)
+      })
+
+    return () => { active = false }
+  }, [status, avatarVersion])
+
+  useEffect(() => () => {
+    if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current)
+  }, [])
+
+  useEffect(() => {
+    const refresh = () => setAvatarVersion((v) => v + 1)
+    window.addEventListener('avatar-changed', refresh)
+    return () => window.removeEventListener('avatar-changed', refresh)
+  }, [])
 
   if (status === 'checking') {
     return <div className="app-loading" role="status">Connecting to Connect…</div>
@@ -180,7 +215,11 @@ function AuthenticatedApp() {
       </main>
       <div className="profile">
         <div className="profile-identity">
-          <span className="profile-avatar">{(user?.email || 'U').charAt(0).toUpperCase()}</span>
+          {avatarUrl ? (
+            <img className="profile-avatar" src={avatarUrl} alt="Profile picture" />
+          ) : (
+            <span className="profile-avatar">{(user?.email || 'U').charAt(0).toUpperCase()}</span>
+          )}
           <span className="profile-email" title={user?.email}>{user?.email || 'Connect user'}</span>
         </div>
         <div className="profile-audio-controls">

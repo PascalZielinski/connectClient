@@ -4,6 +4,7 @@ import { VoiceControls } from '../api/audio.js'
 import { apiRequest } from '../api/client.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { useVoice } from '../voice/VoiceContext.jsx'
+import AvatarCropper from '../components/AvatarCropper.jsx'
 import './ServerPage.css'
 
 function ProfileSettingsPage() {
@@ -32,6 +33,13 @@ function ProfileSettingsPage() {
   const [microphoneReady, setMicrophoneReady] = useState(false)
   const [monitoring, setMonitoring] = useState(false)
   const [monitorError, setMonitorError] = useState('')
+  const fileInputRef = useRef(null)
+  const [cropSrc, setCropSrc] = useState(null)
+  const [avatarUrl, setAvatarUrl] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [avatarVersion, setAvatarVersion] = useState(0)
+  const avatarUrlRef = useRef(null)
+  const hasProfile = Boolean(profile)
 
   useEffect(() => {
     if (loading || !microphoneControlsRef.current || !headphoneControlsRef.current) return undefined
@@ -77,9 +85,70 @@ function ProfileSettingsPage() {
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    if (!hasProfile) return undefined
+    let active = true
+
+    apiRequest('/me/profile/image', { responseType: 'blob' })
+      .then((blob) => {
+        if (!active) return
+        if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current)
+        const objectUrl = URL.createObjectURL(blob)
+        avatarUrlRef.current = objectUrl
+        setAvatarUrl(objectUrl)
+      })
+      .catch((imageError) => {
+        if (!active || imageError.status === 404) return
+        setError(imageError.message || 'Could not load your profile picture.')
+      })
+
+    return () => { active = false }
+  }, [hasProfile, avatarVersion])
+
+  useEffect(() => () => {
+    if (avatarUrlRef.current) URL.revokeObjectURL(avatarUrlRef.current)
+  }, [])
+
   function updateField(event) {
     const { name, value } = event.target
     setForm((current) => ({ ...current, [name]: value }))
+  }
+
+  function closeCropper() {
+    if (cropSrc) URL.revokeObjectURL(cropSrc)
+    setCropSrc(null)
+  }
+
+  function onFileChange(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Image is too large (max 10 MB).')
+      return
+    }
+    setError('')
+    setCropSrc(URL.createObjectURL(file))
+  }
+
+  async function handleCropped(blob) {
+    setUploading(true)
+    setError('')
+    setFeedback('')
+    try {
+      const body = new FormData()
+      body.append('image', blob, 'avatar.jpg')
+      await apiRequest('/me/profile/image', { method: 'POST', body })
+
+      setAvatarVersion((v) => v + 1)
+      window.dispatchEvent(new Event('avatar-changed'))
+      setFeedback('Profile picture updated.')
+      closeCropper()
+    } catch (uploadError) {
+      setError(uploadError.message || 'Could not upload the image.')
+    } finally {
+      setUploading(false)
+    }
   }
 
   async function handleSave(event) {
@@ -135,6 +204,24 @@ function ProfileSettingsPage() {
           maxLength={100}
           required
         />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg"
+          onChange={onFileChange}
+          hidden
+        />
+        {avatarUrl && <img src={avatarUrl} alt="Profile picture" width={96} height={96} style={{ borderRadius: '50%' }} />}
+        <button
+          className="Upload-Button"
+          type="button"
+          disabled={!profile || uploading}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          {uploading ? 'Uploading…' : 'Change picture'}
+        </button>
+        {!profile && <p>Save your profile first, then you can add a picture.</p>}
+        {cropSrc && <AvatarCropper src={cropSrc} onDone={handleCropped} onCancel={closeCropper} />}
         <label htmlFor="profile-bio">Bio</label>
         <textarea id="profile-bio" name="bio" value={form.bio} onChange={updateField} rows={5} maxLength={500} />
         <label htmlFor="audio-input-device">Input device</label>

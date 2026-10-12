@@ -4,6 +4,10 @@ import { apiPost, apiRequest } from '../api/client.js'
 import { serverName, unwrapServer } from '../api/servers.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { useVoice } from '../voice/VoiceContext.jsx'
+import emojiPlusIcon from '../assets/emoji-smile-plus.svg'
+import speakerIcon from '../assets/speaker-2-svgrepo-com.svg'
+import EmojiPicker from '../components/EmojiPicker'
+import MessageText from '../components/MessageText'
 import './ServerPage.css'
 
 function collection(data, key) {
@@ -193,6 +197,8 @@ function ServerPage() {
     joinVoice,
     leaveVoice,
     toggleMicrophone,
+    screenShares,
+    isSharing,
   } = useVoice()
   const [server, setServer] = useState(null)
   const [channels, setChannels] = useState([])
@@ -222,11 +228,14 @@ function ServerPage() {
   const [editMessageContent, setEditMessageContent] = useState('')
   const [savingMessageEdit, setSavingMessageEdit] = useState(false)
   const [downloadingAttachmentUuid, setDownloadingAttachmentUuid] = useState('')
-  const { screenShares, isSharing } = useVoice() // zu deinem bestehenden Destructuring dazu
   const [watchedIdentity, setWatchedIdentity] = useState(null)
+  const [isScreenShareFullscreen, setIsScreenShareFullscreen] = useState(false)
   const watchedShare = screenShares.find((share) => share.identity === watchedIdentity)
   const fileInput = useRef(null)
   const newestMessageId = useRef(0)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const emojiButtonRef = useRef(null)
+  const messageInputRef = useRef(null)
 
   const loadServer = useCallback(async () => {
     setLoading(true)
@@ -262,6 +271,7 @@ function ServerPage() {
         setNewChannelType('')
         setEditingChannel(null)
         setEditingMessageUuid('')
+        setIsScreenShareFullscreen(false)
       }
     }
     window.addEventListener('click', closeContextMenu)
@@ -282,6 +292,23 @@ function ServerPage() {
   )
   const activeChannelUuid = activeChannel?.uuid || activeChannel?.channel_uuid
   const settings = server?.settings || server || {}
+
+  function leaveScreenShare() {
+  setIsScreenShareFullscreen(false)
+  setWatchedIdentity(null)
+  }
+
+    useEffect(() => {
+      if (watchedIdentity && !watchedShare) {
+        setWatchedIdentity(null)
+        setIsScreenShareFullscreen(false)
+      }
+    }, [watchedIdentity, watchedShare])
+
+    useEffect(() => {
+      setWatchedIdentity(null)
+      setIsScreenShareFullscreen(false)
+  }, [activeChannelUuid])
 
   useEffect(() => {
     if (activeChannel?.type === 'voice' && activeChannelUuid) {
@@ -520,6 +547,21 @@ function ServerPage() {
     }
   }
 
+    function insertEmoji(emoji) {
+    const el = messageInputRef.current
+    const start = el?.selectionStart ?? messageInput.length
+    const end = el?.selectionEnd ?? messageInput.length
+    const next = messageInput.slice(0, start) + emoji + messageInput.slice(end)
+    if (next.length > 4000) return
+    setMessageInput(next)
+    setEmojiOpen(false)
+    requestAnimationFrame(() => {
+      el?.focus()
+      const pos = start + emoji.length
+      el?.setSelectionRange(pos, pos)
+    })
+  }
+
   async function handleSendMessage(event) {
     event.preventDefault()
     const content = messageInput.trim()
@@ -726,7 +768,16 @@ async function handleDownloadAttachment(attachment) {
                       className={`server-channel-link${String(id) === channelId ? ' is-active' : ''}`}
                       to={`/servers/${uuid}/channels/${id}`}
                     >
-                      <span aria-hidden="true">{type === 'text' ? '#' : '◖'}</span>
+                      {type === 'text' ? (
+                        <span aria-hidden="true">#</span>
+                      ) : (
+                        <img
+                          className="server-channel-icon"
+                          src={speakerIcon}
+                          alt=""
+                          aria-hidden="true"
+                        />
+                      )}
                       <span>{channel.name}</span>
                     </Link>
                     {canManageChannels && (
@@ -749,119 +800,124 @@ async function handleDownloadAttachment(attachment) {
         </div>
       </aside>
 
-      <main className="server-channel-main">
-        <header className="server-channel-header">
-          {activeChannel ? (
-            <>
-              <span className="server-channel-header-type">{activeChannel.type === 'text' ? '#' : '◖'}</span>
-              <h1>{activeChannel.name}</h1>
-              <span className="server-channel-header-divider" />
-              <p>{settings.description || serverName(server)}</p>
-            </>
-          ) : (
-            <>
-              <h1>{serverName(server)}</h1>
-              <span className="server-channel-header-divider" />
-              <p>{settings.description || 'Select a channel to get started.'}</p>
-            </>
-          )}
-        </header>
-
-        {error && <p className="server-workspace-error" role="alert">{error}</p>}
-        {(messagesError || pollError) && (
-          <p className="server-workspace-error" role="alert">{messagesError || pollError}</p>
-        )}
-
-        {!activeChannel ? (
-          <div className="server-blank-canvas" aria-label="Server workspace">
-            {!channels.length && <p>No channels yet.</p>}
-          </div>
-        ) : activeChannel.type === 'voice' ? (
-          <section className="voice-channel" aria-label={`${activeChannel.name} voice channel`}>
-            <div className="voice-controls">
-              <p className={`voice-connection-status is-${voiceStatus}`} role="status">
-                {voiceStatus === 'connecting' ? 'Connecting…'
-                  : voiceStatus === 'connected' ? 'Connected'
-                    : voiceStatus === 'error' ? 'Connection failed'
-                      : 'Not connected'}
-              </p>
-              {voiceStatus === 'connected' ? (
-                <div className="voice-control-actions">
-                  <button type="button" onClick={toggleMicrophone} disabled={microphoneBusy || voiceStatus === 'connecting'}>
-                    {microphoneBusy ? 'Updating…' : microphoneEnabled ? 'Mute microphone' : 'Unmute microphone'}
-                  </button>
-                  <button className="voice-leave-button" type="button" onClick={leaveVoice}>Leave voice</button>
-                </div>
-              ) : voiceStatus !== 'connecting' ? (
-                <button type="button" onClick={() => void joinVoice(activeChannelUuid)}>
-                  {voiceStatus === 'error' ? 'Try again' : 'Join voice'}
-                </button>
-              ) : null}
-            </div>
-            {voiceError && (
-              <p className="voice-error" role="alert">
-                {voiceError}
-              </p>
+        <main className="server-channel-main">
+          <header className="server-channel-header">
+            {activeChannel ? (
+              <>
+                <span className="server-channel-header-type">{activeChannel.type === 'text' ? '#' : '◖'}</span>
+                <h1>{activeChannel.name}</h1>
+                <span className="server-channel-header-divider" />
+              </>
+            ) : (
+              <>
+                <h1>{serverName(server)}</h1>
+                <span className="server-channel-header-divider" />
+                <p>{settings.description || 'Select a channel to get started.'}</p>
+              </>
             )}
+            {isScreenShareFullscreen && watchedShare && (
+              <button
+                type="button"
+                className="screen-share-exit-fullscreen"
+                onClick={() => setIsScreenShareFullscreen(false)}
+              >
+                Exit fullscreen
+              </button>
+            )}
+          </header>
 
-            <section
-              className="voice-participant-section"
-              aria-label="People in this call"
-            >
-              <h2>In this call</h2>
+          {!isScreenShareFullscreen && error && (
+            <p className="server-workspace-error" role="alert">{error}</p>
+          )}
+          {!isScreenShareFullscreen && (messagesError || pollError) && (
+            <p className="server-workspace-error" role="alert">{messagesError || pollError}</p>
+          )}
 
-              {voiceParticipants.length === 0 && voiceStatus !== "connected" ? (
-                <p className="voice-empty">
-                  Join the call to see its participants.
+          {isScreenShareFullscreen && watchedShare ? (
+            <div className="screen-share-fullscreen">
+              <ScreenShareView track={watchedShare.track} />
+            </div>
+          ) : !activeChannel ? (
+            <div className="server-blank-canvas" aria-label="Server workspace">
+              {!channels.length && <p>No channels yet.</p>}
+            </div>
+          ) : activeChannel.type === 'voice' ? (
+            <section className="voice-channel" aria-label={`${activeChannel.name} voice channel`}>
+              <div className="voice-controls">
+                <p className={`voice-connection-status is-${voiceStatus}`} role="status">
+                  {voiceStatus === 'connecting' ? 'Connecting…'
+                    : voiceStatus === 'connected' ? 'Connected'
+                      : voiceStatus === 'error' ? 'Connection failed. Your saved microphone may not be available. Please check your audio settings and select another device.'
+                        : 'Not connected'}
                 </p>
-              ) : (
-                <ul className="voice-participant-list">
-                  {voiceStatus === "connected" && user?.uuid && (
-                    <VoiceParticipant
-                      key={user.uuid}
-                      {...voiceParticipantDetails(user.uuid)}
-                      isSpeaking={microphoneActive}
-                      isLive={isSharing}
-                    />
-                  )}
-
-                  {voiceParticipants.map((identity) => (
-                    <VoiceParticipant
-                      key={identity}
-                      {...voiceParticipantDetails(identity)}
-                      isLive={screenShares.some(
-                        (share) => share.identity === identity
-                      )}
-                      isWatching={watchedShare?.identity === identity}
-                      onJoinLive={() => setWatchedIdentity(identity)}
-                    />
-                  ))}
-
-                  {voiceStatus === "connected" &&
-                    voiceParticipants.length === 0 && (
-                      <li className="voice-empty">
-                        You are the only person in this call.
-                      </li>
-                    )}
-                </ul>
+                {voiceStatus === 'connected' ? (
+                  <div className="voice-control-actions">
+                    <button type="button" onClick={toggleMicrophone} disabled={microphoneBusy || voiceStatus === 'connecting'}>
+                      {microphoneBusy ? 'Updating…' : microphoneEnabled ? 'Mute microphone' : 'Unmute microphone'}
+                    </button>
+                    <button className="voice-leave-button" type="button" onClick={leaveVoice}>Leave voice</button>
+                  </div>
+                ) : voiceStatus !== 'connecting' ? (
+                  <button type="button" onClick={() => void joinVoice(activeChannelUuid)}>
+                    {voiceStatus === 'error' ? 'Try again' : 'Join voice'}
+                  </button>
+                ) : null}
+              </div>
+              {voiceError && (
+                <p className="voice-error" role="alert">
+                  {voiceError}
+                </p>
               )}
+
+              <section className="voice-participant-section" aria-label="People in this call">
+                <h2>In this call</h2>
+
+                {voiceParticipants.length === 0 && voiceStatus !== 'connected' ? (
+                  <p className="voice-empty">Join the call to see its participants.</p>
+                ) : (
+                  <ul className="voice-participant-list">
+                    {voiceStatus === 'connected' && user?.uuid && (
+                      <VoiceParticipant
+                        key={user.uuid}
+                        {...voiceParticipantDetails(user.uuid)}
+                        isSpeaking={microphoneActive}
+                        isLive={isSharing}
+                      />
+                    )}
+
+                    {voiceParticipants.map((identity) => (
+                      <VoiceParticipant
+                        key={identity}
+                        {...voiceParticipantDetails(identity)}
+                        isLive={screenShares.some((share) => share.identity === identity)}
+                        isWatching={watchedShare?.identity === identity}
+                        onJoinLive={() => setWatchedIdentity(identity)}
+                      />
+                    ))}
+
+                    {voiceStatus === 'connected' && voiceParticipants.length === 0 && (
+                      <li className="voice-empty">You are the only person in this call.</li>
+                    )}
+                  </ul>
+                )}
+              </section>
 
               {watchedShare && (
                 <div className="screen-share">
                   <ScreenShareView track={watchedShare.track} />
-
-                  <button
-                    type="button"
-                    onClick={() => setWatchedIdentity(null)}
-                  >
-                    Verlassen
-                  </button>
+                  <div className="screen-share-actions">
+                    <button type="button" onClick={leaveScreenShare}>
+                      Verlassen
+                    </button>
+                    <button type="button" onClick={() => setIsScreenShareFullscreen(true)}>
+                      FullScreen
+                    </button>
+                  </div>
                 </div>
               )}
             </section>
-          </section>
-        ) : (
-          <>
+          ) : (
+            <>
             <div
               className="chat-content"
               onDragEnter={handleFileDragOver}
@@ -929,7 +985,7 @@ async function handleDownloadAttachment(attachment) {
                           </form>
                         ) : (
                           <>
-                            {message.content && <p>{message.content}</p>}
+                            {message.content && <MessageText content={message.content} />}
                             {message.attachments.map((attachment, index) => (
                               <div className="chat-message-attachment" key={attachment.uuid || `${attachment.name}-${index}`}>
                                 {attachment.isImage && attachment.uuid && (
@@ -985,15 +1041,34 @@ async function handleDownloadAttachment(attachment) {
                   onClick={() => fileInput.current?.click()}
                   disabled={sendingMessage}
                 >
-                  Attach
+                  +
                 </button>
                 <input
+                  ref={messageInputRef}
                   aria-label={`Message ${activeChannel.name}`}
                   placeholder={`Message #${activeChannel.name}`}
                   value={messageInput}
                   maxLength={4000}
                   onChange={(event) => setMessageInput(event.target.value)}
                 />
+                  <button
+                    ref={emojiButtonRef}
+                    className="chat-add-emoji"
+                    type="button"
+                    aria-label="Add emoji"
+                    title="Add emoji"
+                    aria-expanded={emojiOpen}
+                    onClick={() => setEmojiOpen((o) => !o)}
+                  >
+                    <img src={emojiPlusIcon} alt="" />
+                  </button>
+                  {emojiOpen && (
+                    <EmojiPicker
+                      anchorRef={emojiButtonRef}
+                      onSelect={insertEmoji}
+                      onClose={() => setEmojiOpen(false)}
+                    />
+                  )}
                 <button type="submit" disabled={(!messageInput.trim() && !attachedFile) || sendingMessage || !activeChannelUuid}>
                   {sendingMessage ? 'Sending…' : 'Send'}
                 </button>
@@ -1026,7 +1101,19 @@ async function handleDownloadAttachment(attachment) {
           {showChannelTypes && (
             <div className="channel-context-submenu">
               <button type="button" role="menuitem" onClick={() => beginCreateChannel('text')}># Text channel</button>
-              <button type="button" role="menuitem" onClick={() => beginCreateChannel('voice')}>◖ Voice channel</button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => beginCreateChannel('voice')}
+              >
+                <img
+                  className="server-channel-icon"
+                  src={speakerIcon}
+                  alt=""
+                  aria-hidden="true"
+                />
+                Voice channel
+              </button>
             </div>
           )}
         </div>
