@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiRequest } from '../api/client.js'
 import { useAuth } from '../auth/AuthContext.jsx'
@@ -10,11 +10,16 @@ function ServerSettingsPage() {
   const navigate = useNavigate()
   const { refreshServers } = useAuth()
   const [server, setServer] = useState(null)
-  const [form, setForm] = useState({ name: '', description: '', profile_image: '', publicy: false })
+  const [form, setForm] = useState({ name: '', description: '', publicy: false })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [feedback, setFeedback] = useState('')
+  const fileInputRef = useRef(null)
+  const [imageUrl, setImageUrl] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [imageVersion, setImageVersion] = useState(0)
+  const imageUrlRef = useRef(null)
 
   useEffect(() => {
     let active = true
@@ -27,7 +32,6 @@ function ServerSettingsPage() {
         setForm({
           name: settings.name || '',
           description: settings.description || '',
-          profile_image: settings.profile_image || '',
           publicy: Boolean(settings.publicy),
         })
       })
@@ -40,9 +44,66 @@ function ServerSettingsPage() {
     return () => { active = false }
   }, [uuid])
 
+  useEffect(() => {
+    if (loading) return undefined
+    let active = true
+
+    apiRequest(`/servers/${uuid}/image`, { responseType: 'blob' })
+      .then((blob) => {
+        if (!active) return
+        if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current)
+        const objectUrl = URL.createObjectURL(blob)
+        imageUrlRef.current = objectUrl
+        setImageUrl(objectUrl)
+      })
+      .catch((imageError) => {
+        if (!active || imageError.status === 404) return
+        setError(imageError.message || 'Could not load the server picture.')
+      })
+
+    return () => { active = false }
+  }, [loading, uuid, imageVersion])
+
+  useEffect(() => () => {
+    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current)
+  }, [])
+
   function updateField(event) {
     const { name, value, checked, type } = event.target
     setForm((current) => ({ ...current, [name]: type === 'checkbox' ? checked : value }))
+  }
+
+  async function onFileChange(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    const allowedTypes = ['image/png', 'image/jpeg']
+    if (!allowedTypes.includes(file.type)) {
+      setError('Only PNG and JPEG files are allowed.')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Image is too large (max 10 MB).')
+      return
+    }
+
+    setUploading(true)
+    setError('')
+    setFeedback('')
+    try {
+      const body = new FormData()
+      body.append('image', file, file.name || 'server.jpg')
+      await apiRequest(`/servers/${uuid}/image`, { method: 'POST', body })
+
+      setImageVersion((v) => v + 1)
+      window.dispatchEvent(new Event('server-changed'))
+      setFeedback('Server picture updated.')
+    } catch (uploadError) {
+      setError(uploadError.message || 'Could not upload the image.')
+    } finally {
+      setUploading(false)
+    }
   }
 
   async function handleSave(event) {
@@ -56,7 +117,6 @@ function ServerSettingsPage() {
         body: JSON.stringify({
           name: form.name.trim(),
           description: form.description.trim(),
-          profile_image: form.profile_image.trim(),
           publicy: form.publicy,
         }),
       })
@@ -95,10 +155,42 @@ function ServerSettingsPage() {
       <form className="server-settings-form" onSubmit={handleSave}>
         <label htmlFor="settings-name">Server name</label>
         <input id="settings-name" name="name" value={form.name} onChange={updateField} maxLength={100} required />
+
+        <label>Server picture</label>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg"
+          onChange={onFileChange}
+          hidden
+        />
+        {imageUrl && (
+          <img
+            src={imageUrl}
+            alt="Server picture"
+            width={96}
+            height={96}
+            style={{ borderRadius: '50%', objectFit: 'cover' }}
+          />
+        )}
+        <button
+          className="Upload-Button"
+          type="button"
+          disabled={uploading}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          {uploading ? 'Uploading…' : 'Change picture'}
+        </button>
+
         <label htmlFor="settings-description">Description</label>
-        <textarea id="settings-description" name="description" value={form.description} onChange={updateField} rows={4} maxLength={500} />
-        <label htmlFor="settings-image">Profile image URL</label>
-        <input id="settings-image" name="profile_image" type="url" value={form.profile_image} onChange={updateField} placeholder="https://example.com/image.png" />
+        <textarea
+          id="settings-description"
+          name="description"
+          value={form.description}
+          onChange={updateField}
+          rows={4}
+          maxLength={500}
+        />
         <label className="settings-public-toggle">
           <input name="publicy" type="checkbox" checked={form.publicy} onChange={updateField} />
           <span>Make this server public</span>

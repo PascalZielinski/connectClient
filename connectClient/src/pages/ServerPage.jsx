@@ -1091,31 +1091,19 @@ async function handleDownloadAttachment(attachment) {
           role="menu"
           aria-label="Channel options"
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => setShowChannelTypes((shown) => !shown)}
-          >
-            Create new channel <span>{showChannelTypes ? '⌄' : '›'}</span>
+          <p className="channel-context-title">Create new channel</p>
+          <button type="button" role="menuitem" onClick={() => beginCreateChannel('text')}>
+            # Text channel
           </button>
-          {showChannelTypes && (
-            <div className="channel-context-submenu">
-              <button type="button" role="menuitem" onClick={() => beginCreateChannel('text')}># Text channel</button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => beginCreateChannel('voice')}
-              >
-                <img
-                  className="server-channel-icon"
-                  src={speakerIcon}
-                  alt=""
-                  aria-hidden="true"
-                />
-                Voice channel
-              </button>
-            </div>
-          )}
+          <button type="button" role="menuitem" onClick={() => beginCreateChannel('voice')}>
+            <img
+              className="server-channel-icon"
+              src={speakerIcon}
+              alt=""
+              aria-hidden="true"
+            />
+            Voice channel
+          </button>
         </div>
       )}
 

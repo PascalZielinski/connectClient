@@ -12,6 +12,7 @@ import ServerPage from './pages/ServerPage.jsx'
 import ServerSettingsPage from './pages/ServerSettingsPage.jsx'
 import StartUpPage from './pages/StartUpPage.jsx'
 import CreateServerDialog from './pages/CreateServerDialog.jsx'
+import ServerAvatar from './components/ServerAvatar.jsx'
 import headphonesIcon from './assets/headphone-music-svgrepo-com.svg'
 import headphonesMutedIcon from './assets/headphone-slash.svg'
 import microphoneIcon from './assets/microphone-svgrepo-com.svg'
@@ -52,17 +53,15 @@ function AuthenticatedApp() {
     stopScreenShare,
   } = useVoice()
   const inCall = voiceStatus === 'connected'
-  const confirmShare = async () => {
-    setShareDialogOpen(false)
-    await startScreenShare({ resolution: SHARE_PRESETS[shareQuality], audio: shareAudio })
-  }
+  const [displayName, setDisplayName] = useState('')
+  const [profileVersion, setProfileVersion] = useState(0)
+  const [serverImageVersion, setServerImageVersion] = useState(0)
   const navigate = useNavigate()
+
   const retryServerLoading = async () => {
     try {
       await refreshServers()
-    } catch {
-
-    }
+    } catch {}
   }
 
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
@@ -71,6 +70,11 @@ function AuthenticatedApp() {
   const [avatarUrl, setAvatarUrl] = useState(null)
   const [avatarVersion, setAvatarVersion] = useState(0)
   const avatarUrlRef = useRef(null)
+
+  const confirmShare = async () => {
+    setShareDialogOpen(false)
+    await startScreenShare({ resolution: SHARE_PRESETS[shareQuality], audio: shareAudio })
+  }
 
   useEffect(() => {
     if (status !== 'authenticated') return undefined
@@ -102,6 +106,37 @@ function AuthenticatedApp() {
     const refresh = () => setAvatarVersion((v) => v + 1)
     window.addEventListener('avatar-changed', refresh)
     return () => window.removeEventListener('avatar-changed', refresh)
+  }, [])
+
+  useEffect(() => {
+    const refresh = () => setServerImageVersion((v) => v + 1)
+    window.addEventListener('server-changed', refresh)
+    return () => window.removeEventListener('server-changed', refresh)
+  }, [])
+
+  useEffect(() => {
+    if (status !== 'authenticated') return undefined
+    let active = true
+
+    apiRequest('/me/profile')
+      .then((result) => {
+        if (!active) return
+        const profile = result?.profile || result
+        setDisplayName(profile?.display_name || '')
+      })
+      .catch((profileError) => {
+        if (!active) return
+
+        if (profileError.status === 404) setDisplayName('')
+      })
+
+    return () => { active = false }
+  }, [status, profileVersion])
+
+  useEffect(() => {
+    const refresh = () => setProfileVersion((v) => v + 1)
+    window.addEventListener('profile-changed', refresh)
+    return () => window.removeEventListener('profile-changed', refresh)
   }, [])
 
   if (status === 'checking') {
@@ -166,9 +201,11 @@ function AuthenticatedApp() {
                 aria-label={serverName(item)}
                 title={serverName(item)}
               >
-                {item.settings.profile_image
-                  ? <img src={item.settings.profile_image} alt="" />
-                  : <span>{serverInitial(item)}</span>}
+                <ServerAvatar
+                  uuid={uuid}
+                  fallback={serverInitial(item)}
+                  version={serverImageVersion}
+                />
               </NavLink>
             )
           })}
@@ -218,9 +255,13 @@ function AuthenticatedApp() {
           {avatarUrl ? (
             <img className="profile-avatar" src={avatarUrl} alt="Profile picture" />
           ) : (
-            <span className="profile-avatar">{(user?.email || 'U').charAt(0).toUpperCase()}</span>
+            <span className="profile-avatar">
+              {(displayName || user?.username || user?.email || 'U').charAt(0).toUpperCase()}
+            </span>
           )}
-          <span className="profile-email" title={user?.email}>{user?.email || 'Connect user'}</span>
+          <span className="profile-email" title={displayName || user?.username || user?.email}>
+            {displayName || user?.username || user?.email || 'Connect user'}
+          </span>
         </div>
         <div className="profile-audio-controls">
           <button

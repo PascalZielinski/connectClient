@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { apiRequest } from '../api/client.js'
-import muteNotification from '../assets/sounds/universfield-new-notification-035-485894.mp3'
-import callNotification from '../assets/sounds/universfield-system-notification-02-352442.mp3'
+import muteNotification from '../assets/sounds/mute.mp3'
+import unMuteNotification from '../assets/sounds/unmute.mp3'
+import callNotification from '../assets/sounds/joinCall.mp3'
+import callLeaveNotification from '../assets/sounds/leaveCall.mp3'
 
 const VoiceContext = createContext(null)
 const INPUT_DEVICE_KEY = 'connect.audioInputDevice'
@@ -48,7 +50,7 @@ export function VoiceProvider({ children }) {
   const cleanupAudioRef = useRef(() => {})
   const requestIdRef = useRef(0)
   const audioContainerRef = useRef(null)
-  const muteNotificationRef = useRef(null)
+  const toggleSoundsRef = useRef({})
   const voiceConnectedRef = useRef(false)
   const [participants, setParticipants] = useState([])
   const [status, setStatus] = useState('disconnected')
@@ -117,14 +119,17 @@ export function VoiceProvider({ children }) {
     }
   }, [refreshDevices])
 
-  const playCallNotification = useCallback(() => {
-    const audio = new Audio(callNotification)
+  const playSound = useCallback((src) => {
+    const audio = new Audio(src)
     audio.play().catch((playError) => {
       setError(playError.message || 'Could not play the voice call notification.')
     })
   }, [])
 
-  const joinVoice = useCallback(async (channelUuid) => {
+  const playJoinNotification = useCallback(() => playSound(callNotification), [playSound])
+  const playLeaveNotification = useCallback(() => playSound(callLeaveNotification), [playSound])
+
+    const joinVoice = useCallback(async (channelUuid) => {
     const requestId = ++requestIdRef.current
     const previousRoom = roomRef.current
     const wasConnected = voiceConnectedRef.current
@@ -133,7 +138,7 @@ export function VoiceProvider({ children }) {
     cleanupAudioRef.current()
     cleanupAudioRef.current = () => {}
     previousRoom?.disconnect()
-    if (wasConnected) playCallNotification()
+    if (wasConnected) playLeaveNotification()
     setParticipants([])
     setScreenShares([])
     setIsSharing(false)
@@ -155,11 +160,11 @@ export function VoiceProvider({ children }) {
     }
     const participantConnected = () => {
       updateParticipants()
-      playCallNotification()
+      playJoinNotification()
     }
     const participantDisconnected = () => {
       updateParticipants()
-      playCallNotification()
+      playLeaveNotification()
     }
     const attachAudio = (track, publication, participant) => {
       if (track.kind !== 'audio') return
@@ -210,7 +215,7 @@ export function VoiceProvider({ children }) {
       setIsSharing(false)
       setMicrophoneActive(false)
       setStatus('disconnected')
-      if (wasVoiceConnected) playCallNotification()
+      if (wasVoiceConnected) playLeaveNotification()
     }
 
     try {
@@ -270,7 +275,7 @@ export function VoiceProvider({ children }) {
       if (requestId === requestIdRef.current) {
         voiceConnectedRef.current = true
         setStatus('connected')
-        playCallNotification()
+        playJoinNotification()
         await refreshDevices()
       }
     } catch (connectError) {
@@ -293,7 +298,7 @@ export function VoiceProvider({ children }) {
       setStatus('error')
       setError(connectError.message || 'Could not connect to the voice channel.')
     }
-  }, [refreshDevices, playCallNotification])
+  }, [refreshDevices, playJoinNotification, playLeaveNotification])
 
   const leaveVoice = useCallback(() => {
     const wasConnected = voiceConnectedRef.current
@@ -310,8 +315,8 @@ export function VoiceProvider({ children }) {
     setMicrophoneActive(false)
     setMicrophoneBusy(false)
     setStatus('disconnected')
-    if (wasConnected) playCallNotification()
-  }, [playCallNotification])
+    if (wasConnected) playLeaveNotification()
+  }, [playLeaveNotification])
 
   const startScreenShare = useCallback(async ({ resolution, audio } = {}) => {
     const currentRoom = roomRef.current
@@ -374,10 +379,14 @@ export function VoiceProvider({ children }) {
     })
   }, [])
 
-  const playMuteNotification = useCallback(() => {
-    if (!muteNotificationRef.current) muteNotificationRef.current = new Audio(muteNotification)
-    muteNotificationRef.current.currentTime = 0
-    muteNotificationRef.current.play().catch((playError) => {
+  const playToggleNotification = useCallback((enabled) => {
+    const key = enabled ? 'on' : 'off'
+    if (!toggleSoundsRef.current[key]) {
+      toggleSoundsRef.current[key] = new Audio(enabled ? unMuteNotification : muteNotification)
+    }
+    const audio = toggleSoundsRef.current[key]
+    audio.currentTime = 0
+    audio.play().catch((playError) => {
       setError(playError.message || 'Could not play the audio notification.')
     })
   }, [])
@@ -386,15 +395,15 @@ export function VoiceProvider({ children }) {
     const nextEnabled = !microphoneEnabled
     if (!await applyMicrophoneEnabled(nextEnabled)) return
     if (nextEnabled && !outputEnabled) updateOutputEnabled(true)
-    playMuteNotification()
-  }, [microphoneEnabled, outputEnabled, applyMicrophoneEnabled, updateOutputEnabled, playMuteNotification])
+    playToggleNotification(nextEnabled)
+  }, [microphoneEnabled, outputEnabled, applyMicrophoneEnabled, updateOutputEnabled, playToggleNotification])
 
   const toggleOutput = useCallback(async () => {
     const nextEnabled = !outputEnabled
     if (!await applyMicrophoneEnabled(nextEnabled)) return
     updateOutputEnabled(nextEnabled)
-    playMuteNotification()
-  }, [outputEnabled, applyMicrophoneEnabled, updateOutputEnabled, playMuteNotification])
+    playToggleNotification(nextEnabled)
+  }, [outputEnabled, applyMicrophoneEnabled, updateOutputEnabled, playToggleNotification])
 
   const setHeadphoneVolume = useCallback((volume) => {
     const nextVolume = Math.min(1, Math.max(0, volume))
