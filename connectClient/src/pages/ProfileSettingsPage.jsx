@@ -318,7 +318,7 @@ function ProfileSettingsPage() {
                       >
                         {uploading ? 'Uploading…' : 'Change picture'}
                       </button>
-                      {!profile && <p className="ps-hint">Save your profile first, then you can add a picture.</p>}
+                      {!profile && <p className="ps-hint">Save your profile first, then you can add a picture. dont ask me what i did wrong</p>}
                     </div>
 
                     <div className="ps-fields-col">

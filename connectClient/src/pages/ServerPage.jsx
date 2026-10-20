@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { apiPost, apiRequest } from '../api/client.js'
 import { serverName, unwrapServer } from '../api/servers.js'
@@ -173,6 +173,43 @@ function VoiceParticipant({
   )
 }
 
+function SidebarVoiceUser({ name, avatarUrl, isSpeaking = false, isLive = false }) {
+  const [avatarFailed, setAvatarFailed] = useState(false)
+
+  return (
+    <li className={`sidebar-voice-user${isSpeaking ? ' is-speaking' : ''}`}>
+      <span className="sidebar-voice-avatar">
+        {avatarUrl && !avatarFailed ? (
+          <img src={avatarUrl} alt="" onError={() => setAvatarFailed(true)} />
+        ) : (
+          name.charAt(0).toUpperCase()
+        )}
+      </span>
+      <span className="sidebar-voice-name" title={name}>{name}</span>
+      {isLive && <span className="sidebar-voice-live">LIVE</span>}
+    </li>
+  )
+}
+
+function MemberListItem({ name, avatarUrl, role, isCurrentUser }) {
+  const [avatarFailed, setAvatarFailed] = useState(false)
+
+  return (
+    <li className="member-list-item">
+      <span className="member-list-avatar">
+        {avatarUrl && !avatarFailed ? (
+          <img src={avatarUrl} alt="" onError={() => setAvatarFailed(true)} />
+        ) : (
+          name.charAt(0).toUpperCase()
+        )}
+      </span>
+      <span className="member-list-name" title={name}>{name}</span>
+      {isCurrentUser && <span className="member-list-you">You</span>}
+      {role && role !== 'member' && <span className="member-list-role">{role}</span>}
+    </li>
+  )
+}
+
 function ScreenShareView({ track }) {
   const ref = useRef(null)
   useEffect(() => {
@@ -236,6 +273,7 @@ function ServerPage() {
   const [emojiOpen, setEmojiOpen] = useState(false)
   const emojiButtonRef = useRef(null)
   const messageInputRef = useRef(null)
+  const [voiceRoster, setVoiceRoster] = useState({})
 
   const loadServer = useCallback(async () => {
     setLoading(true)
@@ -294,20 +332,20 @@ function ServerPage() {
   const settings = server?.settings || server || {}
 
   function leaveScreenShare() {
-  setIsScreenShareFullscreen(false)
-  setWatchedIdentity(null)
+    setIsScreenShareFullscreen(false)
+    setWatchedIdentity(null)
   }
 
-    useEffect(() => {
-      if (watchedIdentity && !watchedShare) {
-        setWatchedIdentity(null)
-        setIsScreenShareFullscreen(false)
-      }
-    }, [watchedIdentity, watchedShare])
-
-    useEffect(() => {
+  useEffect(() => {
+    if (watchedIdentity && !watchedShare) {
       setWatchedIdentity(null)
       setIsScreenShareFullscreen(false)
+    }
+  }, [watchedIdentity, watchedShare])
+
+  useEffect(() => {
+    setWatchedIdentity(null)
+    setIsScreenShareFullscreen(false)
   }, [activeChannelUuid])
 
   useEffect(() => {
@@ -323,6 +361,73 @@ function ServerPage() {
     text: channels.filter((channel) => channel.type === 'text'),
     voice: channels.filter((channel) => channel.type === 'voice'),
   }), [channels])
+
+  useEffect(() => {
+    if (!uuid) return undefined
+    const controller = new AbortController()
+    let source
+    let retryTimer
+    let debounceTimer
+
+    const loadVoiceState = async () => {
+      try {
+        const data = await apiRequest(`/voice/servers/${encodeURIComponent(uuid)}/voice-state`, {
+          signal: controller.signal,
+        })
+        if (!controller.signal.aborted) {
+          setVoiceRoster(data?.channels || data?.data?.channels || {})
+        }
+      } catch {
+        /* letzten bekannten Stand behalten */
+      }
+    }
+
+    const scheduleReload = () => {
+      window.clearTimeout(debounceTimer)
+      debounceTimer = window.setTimeout(loadVoiceState, 300)
+    }
+
+    async function connect() {
+      try {
+        const { topic, token } = await apiRequest(
+          `/voice/servers/${encodeURIComponent(uuid)}/mercure`,
+          { signal: controller.signal },
+        )
+        if (controller.signal.aborted) return
+
+        const url = new URL(import.meta.env.VITE_MERCURE_URL, window.location.origin)
+        url.searchParams.append('topic', topic)
+        url.searchParams.append('authorization', token)
+        source = new EventSource(url)
+
+        // Beim (Wieder-)Verbinden den vollen Stand holen
+        source.onopen = () => { void loadVoiceState() }
+
+        // Jedes Event ist nur ein Trigger, der Server-Stand wird neu geladen
+        source.onmessage = () => scheduleReload()
+
+        source.onerror = () => {
+          if (source.readyState === EventSource.CLOSED) {
+            source.close()
+            retryTimer = window.setTimeout(connect, 3000)
+          }
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          retryTimer = window.setTimeout(connect, 5000)
+        }
+      }
+    }
+
+    void connect()
+
+    return () => {
+      controller.abort()
+      window.clearTimeout(retryTimer)
+      window.clearTimeout(debounceTimer)
+      source?.close()
+    }
+  }, [uuid])
 
   useEffect(() => {
     if (!activeChannel || activeChannel.type !== 'text') {
@@ -382,17 +487,19 @@ function ServerPage() {
     return () => controller.abort()
   }, [activeChannel, activeChannelUuid])
 
-  useEffect(() => {
+    useEffect(() => {
     if (!activeChannelUuid || !historyLoaded || activeChannel?.type !== 'text') return undefined
 
+    const channelUuid = activeChannelUuid
     const controller = new AbortController()
-    let polling = false
-    const pollMessages = async () => {
-      if (polling) return
-      polling = true
+    let source
+    let retryTimer
+
+    // Holt verpasste Nachrichten nach (Start, Reconnect)
+    const catchUp = async () => {
       try {
         const data = await apiRequest(
-          `/channels/${encodeURIComponent(activeChannelUuid)}/messages/after/${newestMessageId.current}`,
+          `/channels/${encodeURIComponent(channelUuid)}/messages/after/${newestMessageId.current}`,
           { signal: controller.signal },
         )
         if (controller.signal.aborted) return
@@ -404,22 +511,76 @@ function ServerPage() {
           )
           setMessages((current) => mergeMessages(current, received))
         }
-        setPollError('')
-      } catch (loadError) {
-        if (!controller.signal.aborted) {
-          setPollError(loadError.message || 'Could not check for new messages.')
-        }
-      } finally {
-        polling = false
+      } catch {
+        /* der nächste Reconnect versucht es erneut */
       }
     }
 
-    const interval = window.setInterval(pollMessages, 3000)
+    async function connect() {
+      try {
+        const { topic, token } = await apiRequest(
+          `/channels/${encodeURIComponent(channelUuid)}/mercure`,
+          { signal: controller.signal },
+        )
+        if (controller.signal.aborted) return
+
+        const url = new URL(import.meta.env.VITE_MERCURE_URL, window.location.origin)
+        url.searchParams.append('topic', topic)
+        url.searchParams.append('authorization', token)
+        source = new EventSource(url)
+
+        source.onopen = () => {
+          setPollError('')
+          void catchUp()
+        }
+
+        source.onmessage = (event) => {
+          let data
+          try {
+            data = JSON.parse(event.data)
+          } catch {
+            return
+          }
+          if (data.channel !== channelUuid) return
+
+          if (data.type === 'created') {
+            const message = normalizeMessage(data)
+            newestMessageId.current = Math.max(newestMessageId.current, messageNumericId(message))
+            setMessages((current) => mergeMessages(current, [message]))
+          } else if (data.type === 'updated') {
+            const message = normalizeMessage(data)
+            setMessages((current) => current.map((item) => (
+              item.uuid === message.uuid ? { ...item, content: message.content } : item
+            )))
+          } else if (data.type === 'deleted') {
+            setMessages((current) => current.filter((item) => item.uuid !== data.uuid))
+          }
+        }
+
+        source.onerror = () => {
+          setPollError('Live-Verbindung unterbrochen, verbinde neu…')
+          // Bei abgelaufenem Token gibt der Browser auf: mit frischem Token neu starten
+          if (source.readyState === EventSource.CLOSED) {
+            source.close()
+            retryTimer = window.setTimeout(connect, 3000)
+          }
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setPollError('Live-Verbindung fehlgeschlagen.')
+          retryTimer = window.setTimeout(connect, 5000)
+        }
+      }
+    }
+
+    void connect()
+
     return () => {
       controller.abort()
-      window.clearInterval(interval)
+      window.clearTimeout(retryTimer)
+      source?.close()
     }
-  }, [activeChannel, activeChannelUuid, historyLoaded])
+  }, [activeChannelUuid, activeChannel?.type, historyLoaded])
 
   function openChannelMenu(event) {
     if (!canManageChannels) return
@@ -547,7 +708,7 @@ function ServerPage() {
     }
   }
 
-    function insertEmoji(emoji) {
+  function insertEmoji(emoji) {
     const el = messageInputRef.current
     const start = el?.selectionStart ?? messageInput.length
     const end = el?.selectionEnd ?? messageInput.length
@@ -684,7 +845,7 @@ function ServerPage() {
     }
   }
 
-async function handleDownloadAttachment(attachment) {
+  async function handleDownloadAttachment(attachment) {
     if (!activeChannelUuid || !attachment.uuid || downloadingAttachmentUuid) return
     setDownloadingAttachmentUuid(attachment.uuid)
     setMessagesError('')
@@ -707,7 +868,7 @@ async function handleDownloadAttachment(attachment) {
     } finally {
       setDownloadingAttachmentUuid('')
     }
-}
+  }
 
   function voiceParticipantDetails(identity) {
     const member = members.find((item) =>
@@ -717,7 +878,6 @@ async function handleDownloadAttachment(attachment) {
     const currentProfile = user?.profile || user || {}
     const isCurrentUser = identity === user?.uuid
     const participantProfile = isCurrentUser ? { ...profile, ...currentProfile } : profile
-    
 
     return {
       name: participantProfile.display_name || participantProfile.displayName
@@ -762,31 +922,56 @@ async function handleDownloadAttachment(attachment) {
               <h2>{type === 'text' ? 'TEXT CHANNELS' : 'VOICE CHANNELS'}</h2>
               {channelGroups[type].map((channel) => {
                 const id = channel.uuid || channel.channel_uuid || channel.id
+                const isJoined =
+                  type === 'voice' && String(id) === channelId && voiceStatus === 'connected'
+                const identities = type !== 'voice'
+                  ? []
+                  : isJoined
+                    ? [user?.uuid, ...voiceParticipants].filter(Boolean)
+                    : [...new Set(voiceRoster[id] || [])]
+
                 return (
-                  <div className="server-channel-row" key={id}>
-                    <Link
-                      className={`server-channel-link${String(id) === channelId ? ' is-active' : ''}`}
-                      to={`/servers/${uuid}/channels/${id}`}
-                    >
-                      {type === 'text' ? (
-                        <span aria-hidden="true">#</span>
-                      ) : (
-                        <img
-                          className="server-channel-icon"
-                          src={speakerIcon}
-                          alt=""
-                          aria-hidden="true"
-                        />
+                  <Fragment key={id}>
+                    <div className="server-channel-row">
+                      <Link
+                        className={`server-channel-link${String(id) === channelId ? ' is-active' : ''}`}
+                        to={`/servers/${uuid}/channels/${id}`}
+                      >
+                        {type === 'text' ? (
+                          <span aria-hidden="true">#</span>
+                        ) : (
+                          <img
+                            className="server-channel-icon"
+                            src={speakerIcon}
+                            alt=""
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span>{channel.name}</span>
+                      </Link>
+                      {canManageChannels && (
+                        <div className="server-channel-actions">
+                          <button type="button" aria-label={`Edit ${channel.name}`} onClick={() => beginEditChannel(channel)}>Edit</button>
+                          <button type="button" aria-label={`Delete ${channel.name}`} onClick={() => handleDeleteChannel(channel)}>×</button>
+                        </div>
                       )}
-                      <span>{channel.name}</span>
-                    </Link>
-                    {canManageChannels && (
-                      <div className="server-channel-actions">
-                        <button type="button" aria-label={`Edit ${channel.name}`} onClick={() => beginEditChannel(channel)}>Edit</button>
-                        <button type="button" aria-label={`Delete ${channel.name}`} onClick={() => handleDeleteChannel(channel)}>×</button>
-                      </div>
+                    </div>
+
+                    {identities.length > 0 && (
+                      <ul className="sidebar-voice-users">
+                        {identities.map((identity) => (
+                          <SidebarVoiceUser
+                            key={identity}
+                            {...voiceParticipantDetails(identity)}
+                            isSpeaking={isJoined && identity === user?.uuid && microphoneActive}
+                            isLive={isJoined && (identity === user?.uuid
+                              ? isSharing
+                              : screenShares.some((share) => share.identity === identity))}
+                          />
+                        ))}
+                      </ul>
                     )}
-                  </div>
+                  </Fragment>
                 )
               })}
               {channelGroups[type].length === 0 && (
@@ -800,6 +985,7 @@ async function handleDownloadAttachment(attachment) {
         </div>
       </aside>
 
+      <div className="server-content-row">
         <main className="server-channel-main">
           <header className="server-channel-header">
             {activeChannel ? (
@@ -918,139 +1104,139 @@ async function handleDownloadAttachment(attachment) {
             </section>
           ) : (
             <>
-            <div
-              className="chat-content"
-              onDragEnter={handleFileDragOver}
-              onDragOver={handleFileDragOver}
-              onDragLeave={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget)) setIsFileDragOver(false)
-              }}
-              onDrop={handleFileDrop}
-            >
-              <div className="chat-history" aria-live="polite">
-              {hasOlderMessages && (
-                <button
-                  className="chat-load-older"
-                  type="button"
-                  onClick={handleLoadOlderMessages}
-                  disabled={loadingOlder || !messages[0]?.uuid}
-                >
-                  {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
-                </button>
-              )}
-              {messagesLoading ? (
-                <p className="chat-loading">Loading messages…</p>
-              ) : messages.length === 0 ? (
-                <div className="chat-empty-state">
-                  <span>#</span>
-                  <h2>Welcome to #{activeChannel.name}</h2>
-                  <p>This is the start of the conversation.</p>
-                </div>
-              ) : (
-                messages.map((message) => {
-                  const isAuthor = Boolean(user?.uuid && message.authorUuid === user.uuid)
-                  return (
-                    <article className="chat-message" key={message.uuid || `${message.authorUuid}-${message.timestamp?.getTime()}-${message.content}`}>
-                      <span className="chat-message-avatar">{message.authorName.charAt(0).toUpperCase()}</span>
-                      <div className="chat-message-body">
-                        <div className="chat-message-meta">
-                          <strong>{message.authorName}</strong>
-                          {message.timestamp && (
-                            <time dateTime={message.timestamp.toISOString()}>
-                              {message.timestamp.toLocaleString()}
-                            </time>
-                          )}
-                          {isAuthor && message.uuid && (
-                            <div className="chat-message-actions">
-                              <button type="button" onClick={() => beginEditMessage(message)}>Edit</button>
-                              <button type="button" onClick={() => handleDeleteMessage(message)}>Delete</button>
+              <div
+                className="chat-content"
+                onDragEnter={handleFileDragOver}
+                onDragOver={handleFileDragOver}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) setIsFileDragOver(false)
+                }}
+                onDrop={handleFileDrop}
+              >
+                <div className="chat-history" aria-live="polite">
+                  {hasOlderMessages && (
+                    <button
+                      className="chat-load-older"
+                      type="button"
+                      onClick={handleLoadOlderMessages}
+                      disabled={loadingOlder || !messages[0]?.uuid}
+                    >
+                      {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+                    </button>
+                  )}
+                  {messagesLoading ? (
+                    <p className="chat-loading">Loading messages…</p>
+                  ) : messages.length === 0 ? (
+                    <div className="chat-empty-state">
+                      <span>#</span>
+                      <h2>Welcome to #{activeChannel.name}</h2>
+                      <p>This is the start of the conversation.</p>
+                    </div>
+                  ) : (
+                    messages.map((message) => {
+                      const isAuthor = Boolean(user?.uuid && message.authorUuid === user.uuid)
+                      return (
+                        <article className="chat-message" key={message.uuid || `${message.authorUuid}-${message.timestamp?.getTime()}-${message.content}`}>
+                          <span className="chat-message-avatar">{message.authorName.charAt(0).toUpperCase()}</span>
+                          <div className="chat-message-body">
+                            <div className="chat-message-meta">
+                              <strong>{message.authorName}</strong>
+                              {message.timestamp && (
+                                <time dateTime={message.timestamp.toISOString()}>
+                                  {message.timestamp.toLocaleString()}
+                                </time>
+                              )}
+                              {isAuthor && message.uuid && (
+                                <div className="chat-message-actions">
+                                  <button type="button" onClick={() => beginEditMessage(message)}>Edit</button>
+                                  <button type="button" onClick={() => handleDeleteMessage(message)}>Delete</button>
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                        {editingMessageUuid === message.uuid ? (
-                          <form className="chat-message-edit" onSubmit={handleUpdateMessage}>
-                            <textarea
-                              aria-label="Edit message"
-                              value={editMessageContent}
-                              maxLength={4000}
-                              onChange={(event) => setEditMessageContent(event.target.value)}
-                              autoFocus
-                            />
-                            <div>
-                              <button type="button" onClick={() => setEditingMessageUuid('')} disabled={savingMessageEdit}>Cancel</button>
-                              <button type="submit" disabled={!editMessageContent.trim() || savingMessageEdit}>
-                                {savingMessageEdit ? 'Saving…' : 'Save'}
-                              </button>
-                            </div>
-                          </form>
-                        ) : (
-                          <>
-                            {message.content && <MessageText content={message.content} />}
-                            {message.attachments.map((attachment, index) => (
-                              <div className="chat-message-attachment" key={attachment.uuid || `${attachment.name}-${index}`}>
-                                {attachment.isImage && attachment.uuid && (
-                                  <AttachmentImage channelUuid={activeChannelUuid} attachment={attachment} />
+                            {editingMessageUuid === message.uuid ? (
+                              <form className="chat-message-edit" onSubmit={handleUpdateMessage}>
+                                <textarea
+                                  aria-label="Edit message"
+                                  value={editMessageContent}
+                                  maxLength={4000}
+                                  onChange={(event) => setEditMessageContent(event.target.value)}
+                                  autoFocus
+                                />
+                                <div>
+                                  <button type="button" onClick={() => setEditingMessageUuid('')} disabled={savingMessageEdit}>Cancel</button>
+                                  <button type="submit" disabled={!editMessageContent.trim() || savingMessageEdit}>
+                                    {savingMessageEdit ? 'Saving…' : 'Save'}
+                                  </button>
+                                </div>
+                              </form>
+                            ) : (
+                              <>
+                                {message.content && <MessageText content={message.content} />}
+                                {message.attachments.map((attachment, index) => (
+                                  <div className="chat-message-attachment" key={attachment.uuid || `${attachment.name}-${index}`}>
+                                    {attachment.isImage && attachment.uuid && (
+                                      <AttachmentImage channelUuid={activeChannelUuid} attachment={attachment} />
+                                    )}
+                                    <span title={attachment.name}>{attachment.name}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDownloadAttachment(attachment)}
+                                      disabled={!attachment.uuid || Boolean(downloadingAttachmentUuid)}
+                                      aria-label={`Download ${attachment.name}`}
+                                      title={attachment.uuid ? `Download ${attachment.name}` : 'Attachment ID is unavailable'}
+                                    >
+                                      {downloadingAttachmentUuid === attachment.uuid ? 'Downloading…' : 'Download'}
+                                    </button>
+                                  </div>
+                                ))}
+                                {!message.content && message.attachments.length === 0 && (
+                                  <p className="chat-message-unavailable">No message text or attachment details were returned.</p>
                                 )}
-                                <span title={attachment.name}>{attachment.name}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleDownloadAttachment(attachment)}
-                                  disabled={!attachment.uuid || Boolean(downloadingAttachmentUuid)}
-                                  aria-label={`Download ${attachment.name}`}
-                                  title={attachment.uuid ? `Download ${attachment.name}` : 'Attachment ID is unavailable'}
-                                >
-                                  {downloadingAttachmentUuid === attachment.uuid ? 'Downloading…' : 'Download'}
-                                </button>
-                              </div>
-                            ))}
-                            {!message.content && message.attachments.length === 0 && (
-                              <p className="chat-message-unavailable">No message text or attachment details were returned.</p>
+                              </>
                             )}
-                          </>
-                        )}
-                      </div>
-                    </article>
-                  )
-                })
-              )}
-              </div>
-              {attachedFile && (
-                <div className="chat-attachment-preview">
-                  <span title={attachedFile.name}>Attached: {attachedFile.name}</span>
-                  <button type="button" onClick={() => setAttachedFile(null)} disabled={sendingMessage}>
-                    Remove
-                  </button>
+                          </div>
+                        </article>
+                      )
+                    })
+                  )}
                 </div>
-              )}
-              <form className="chat-composer" onSubmit={handleSendMessage}>
-                <input
-                  ref={fileInput}
-                  className="chat-file-input"
-                  type="file"
-                  aria-label="Choose a file to attach"
-                  onChange={(event) => {
-                    selectDroppedFiles(event.target.files)
-                    event.target.value = ''
-                  }}
-                />
-                <button
-                  className="chat-attach-button"
-                  type="button"
-                  aria-label="Attach a file"
-                  title="Attach a file"
-                  onClick={() => fileInput.current?.click()}
-                  disabled={sendingMessage}
-                >
-                  +
-                </button>
-                <input
-                  ref={messageInputRef}
-                  aria-label={`Message ${activeChannel.name}`}
-                  placeholder={`Message #${activeChannel.name}`}
-                  value={messageInput}
-                  maxLength={4000}
-                  onChange={(event) => setMessageInput(event.target.value)}
-                />
+                {attachedFile && (
+                  <div className="chat-attachment-preview">
+                    <span title={attachedFile.name}>Attached: {attachedFile.name}</span>
+                    <button type="button" onClick={() => setAttachedFile(null)} disabled={sendingMessage}>
+                      Remove
+                    </button>
+                  </div>
+                )}
+                <form className="chat-composer" onSubmit={handleSendMessage}>
+                  <input
+                    ref={fileInput}
+                    className="chat-file-input"
+                    type="file"
+                    aria-label="Choose a file to attach"
+                    onChange={(event) => {
+                      selectDroppedFiles(event.target.files)
+                      event.target.value = ''
+                    }}
+                  />
+                  <button
+                    className="chat-attach-button"
+                    type="button"
+                    aria-label="Attach a file"
+                    title="Attach a file"
+                    onClick={() => fileInput.current?.click()}
+                    disabled={sendingMessage}
+                  >
+                    +
+                  </button>
+                  <input
+                    ref={messageInputRef}
+                    aria-label={`Message ${activeChannel.name}`}
+                    placeholder={`Message #${activeChannel.name}`}
+                    value={messageInput}
+                    maxLength={4000}
+                    onChange={(event) => setMessageInput(event.target.value)}
+                  />
                   <button
                     ref={emojiButtonRef}
                     className="chat-add-emoji"
@@ -1069,19 +1255,39 @@ async function handleDownloadAttachment(attachment) {
                       onClose={() => setEmojiOpen(false)}
                     />
                   )}
-                <button type="submit" disabled={(!messageInput.trim() && !attachedFile) || sendingMessage || !activeChannelUuid}>
-                  {sendingMessage ? 'Sending…' : 'Send'}
-                </button>
-              </form>
-              {isFileDragOver && (
-                <div className="chat-drop-overlay" aria-hidden="true">
-                  <span>Drop a file to attach it</span>
-                </div>
-              )}
-            </div>
-          </>
+                  <button type="submit" disabled={(!messageInput.trim() && !attachedFile) || sendingMessage || !activeChannelUuid}>
+                    {sendingMessage ? 'Sending…' : 'Send'}
+                  </button>
+                </form>
+                {isFileDragOver && (
+                  <div className="chat-drop-overlay" aria-hidden="true">
+                    <span>Drop a file to attach it</span>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </main>
+
+        {!isScreenShareFullscreen && (
+          <aside className="server-member-sidebar" aria-label="Server members">
+            <h2>MEMBERS — {members.length}</h2>
+            <ul className="member-list">
+              {members.map((member) => {
+                const memberUuid = member.user_uuid || member.user?.uuid || member.uuid
+                const details = voiceParticipantDetails(memberUuid)
+                return (
+                  <MemberListItem
+                    key={memberUuid || member.id}
+                    {...details}
+                    role={member.role}
+                  />
+                )
+              })}
+            </ul>
+          </aside>
         )}
-      </main>
+      </div>
 
       {contextMenu && (
         <div

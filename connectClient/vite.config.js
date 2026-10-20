@@ -28,6 +28,10 @@ export default defineConfig(() => ({
         target: "http://192.168.178.66:8080",
         changeOrigin: true,
       },
+      "/.well-known/mercure": {
+        target: "http://192.168.178.66:3100",
+        changeOrigin: true,
+      },
     },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`

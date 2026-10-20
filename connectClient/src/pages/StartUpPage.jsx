@@ -5,6 +5,7 @@ import { serverList, serverName, serverUuid } from '../api/servers.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import friendIcon from '../assets/friend-3-svgrepo-com.svg'
 import serverIcon from '../assets/server-svgrepo-com.svg'
+import DirectChat from './DirectChat.jsx'
 import './StartUpPage.css'
 
 function StartUpPage({
@@ -23,6 +24,7 @@ function StartUpPage({
   const [serverSearchError, setServerSearchError] = useState('')
   const [feedback, setFeedback] = useState('')
   const [error, setError] = useState('')
+  const [activeChat, setActiveChat] = useState(null)
 
   useEffect(() => {
     const term = userQuery.trim()
@@ -110,6 +112,20 @@ function StartUpPage({
     }
   }
 
+  async function openDirectMessage(result) {
+    setUserSearchError('')
+    try {
+      const data = await apiRequest(`/direct/${result.uuid}`, { method: 'POST' })
+      setActiveChat({
+        uuid: data.uuid,
+        name: result.display_name || 'User',
+        messages: data.messages ?? [],
+      })
+    } catch (requestError) {
+      setUserSearchError(requestError.message || 'Could not open conversation.')
+    }
+  }
+
   return (
     <div className="startup-page">
       <div className="DmNavBar">
@@ -118,7 +134,7 @@ function StartUpPage({
             className="dm-nav-button"
             type="button"
             aria-pressed={activeDmView === 'users'}
-            onClick={() => onChangeDmView('users')}
+            onClick={() => { setActiveChat(null); onChangeDmView('users') }}
           >
             <img src={friendIcon} alt="" />
             User
@@ -127,7 +143,7 @@ function StartUpPage({
             className="dm-nav-button"
             type="button"
             aria-pressed={activeDmView === 'servers'}
-            onClick={() => onChangeDmView('servers')}
+            onClick={() => { setActiveChat(null); onChangeDmView('servers') }}
           >
             <img src={serverIcon} alt="" />
             Server
@@ -152,103 +168,115 @@ function StartUpPage({
       </div>
 
       <section className="workspace-content" aria-live="polite">
-        <span className="workspace-eyebrow">YOUR CONNECT SPACE</span>
-        <h1>{activeDmView === 'users' ? 'Find users' : 'Find your people'}</h1>
-        <p className="workspace-lead">
-          {activeDmView === 'users'
-            ? 'Search for people by display name or user UUID.'
-            : 'Find a public server by name or UUID and join the conversation.'}
-        </p>
-        {activeDmView === 'users' ? (
-          <section className="search-section" aria-label="Search users">
-            <input
-              className="workspace-search"
-              type="search"
-              aria-label="Search users by display name or UUID"
-              placeholder="Search users..."
-              value={userQuery}
-              onChange={(event) => setUserQuery(event.target.value)}
-            />
-            {userSearchError && <p className="inline-error" role="alert">{userSearchError}</p>}
-            {loadingUsers ? (
-              <p className="empty-state">Searching users…</p>
-            ) : userQuery.trim() && searchUsers.length === 0 && !userSearchError ? (
-              <p className="empty-state">No users found.</p>
-            ) : (
-            <div className="discovery-list user-search-results">
-              {searchUsers.map((result) => (
-                <article className="discovery-card user-result" key={result.uuid}>
-                  <button
-                    className="open-dm-button"
-                    onClick={() => openDirectMessage(result)}
-                    type="button"
-                  >
-                    DirectMessage
-                  </button>
-
-                  <span className="discovery-avatar">
-                    {(result.display_name || '?').charAt(0).toUpperCase()}
-                  </span>
-
-                  <div className="discovery-info">
-                    <h3>{result.display_name || 'User'}</h3>
-                  </div>
-                </article>
-              ))}
-            </div>
-            )}
-          </section>
+        {activeChat ? (
+          <DirectChat
+            key={activeChat.uuid}
+            conversationUuid={activeChat.uuid}
+            partnerName={activeChat.name}
+            initialMessages={activeChat.messages}
+            onBack={() => setActiveChat(null)}
+          />
         ) : (
-          <div className="server-discovery">
-            <section className="discover-section">
-              <div className="section-heading discover-heading">
-                <div>
-                  <span className="section-kicker">OPEN TO EVERYONE</span>
-                  <h2>Public servers</h2>
-                </div>
+          <>
+            <span className="workspace-eyebrow">YOUR CONNECT SPACE</span>
+            <h1>{activeDmView === 'users' ? 'Find users' : 'Find your people'}</h1>
+            <p className="workspace-lead">
+              {activeDmView === 'users'
+                ? 'Search for people by display name or user UUID.'
+                : 'Find a public server by name or UUID and join the conversation.'}
+            </p>
+            {activeDmView === 'users' ? (
+              <section className="search-section" aria-label="Search users">
                 <input
                   className="workspace-search"
                   type="search"
-                  aria-label="Search servers by name or UUID"
-                  placeholder="Search servers..."
-                  value={serverQuery}
-                  onChange={(event) => setServerQuery(event.target.value)}
+                  aria-label="Search users by display name or UUID"
+                  placeholder="Search users..."
+                  value={userQuery}
+                  onChange={(event) => setUserQuery(event.target.value)}
                 />
-              </div>
-              {serverSearchError && <p className="inline-error" role="alert">{serverSearchError}</p>}
-              {error && <p className="inline-error" role="alert">{error}</p>}
-              {feedback && <p className="inline-success" role="status">{feedback}</p>}
-              {loadingDiscovery ? (
-                <p className="empty-state">Loading public servers…</p>
-              ) : visibleServers.length === 0 ? (
-                <p className="empty-state">{serverQuery.trim() ? 'No servers match your search.' : 'No public servers to discover yet.'}</p>
-              ) : (
-                <div className="discovery-list">
-                  {visibleServers.map((server) => {
-                    const uuid = serverUuid(server)
-                    const joined = joinedIds.has(uuid)
-                    return (
-                      <article className="discovery-card" key={uuid || serverName(server)}>
-                        <span className="discovery-avatar">{serverName(server).charAt(0).toUpperCase()}</span>
+                {userSearchError && <p className="inline-error" role="alert">{userSearchError}</p>}
+                {loadingUsers ? (
+                  <p className="empty-state">Searching users…</p>
+                ) : userQuery.trim() && searchUsers.length === 0 && !userSearchError ? (
+                  <p className="empty-state">No users found.</p>
+                ) : (
+                  <div className="discovery-list user-search-results">
+                    {searchUsers.map((result) => (
+                      <article className="discovery-card user-result" key={result.uuid}>
+                        <button
+                          className="open-dm-button"
+                          onClick={() => openDirectMessage(result)}
+                          type="button"
+                        >
+                          DirectMessage
+                        </button>
+
+                        <span className="discovery-avatar">
+                          {(result.display_name || '?').charAt(0).toUpperCase()}
+                        </span>
+
                         <div className="discovery-info">
-                          <h3>{serverName(server)}</h3>
-                          <p>{server.settings.description || 'A community on Connect.'}</p>
-                          <span>{server.member_count ?? 0} members</span>
+                          <h3>{result.display_name || 'User'}</h3>
                         </div>
-                        {joined ? (
-                          <Link className="secondary-button" to={`/servers/${uuid}`}>Open</Link>
-                        ) : (
-                          <button className="secondary-button" type="button" onClick={() => handleJoin(server)}>
-                            Join
-                          </button>
-                        )}
                       </article>
-                    )
-                  })}
-                </div>
-              )}
-            </section>
-          </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            ) : (
+              <div className="server-discovery">
+                <section className="discover-section">
+                  <div className="section-heading discover-heading">
+                    <div>
+                      <span className="section-kicker">OPEN TO EVERYONE</span>
+                      <h2>Public servers</h2>
+                    </div>
+                    <input
+                      className="workspace-search"
+                      type="search"
+                      aria-label="Search servers by name or UUID"
+                      placeholder="Search servers..."
+                      value={serverQuery}
+                      onChange={(event) => setServerQuery(event.target.value)}
+                    />
+                  </div>
+                  {serverSearchError && <p className="inline-error" role="alert">{serverSearchError}</p>}
+                  {error && <p className="inline-error" role="alert">{error}</p>}
+                  {feedback && <p className="inline-success" role="status">{feedback}</p>}
+                  {loadingDiscovery ? (
+                    <p className="empty-state">Loading public servers…</p>
+                  ) : visibleServers.length === 0 ? (
+                    <p className="empty-state">{serverQuery.trim() ? 'No servers match your search.' : 'No public servers to discover yet.'}</p>
+                  ) : (
+                    <div className="discovery-list">
+                      {visibleServers.map((server) => {
+                        const uuid = serverUuid(server)
+                        const joined = joinedIds.has(uuid)
+                        return (
+                          <article className="discovery-card" key={uuid || serverName(server)}>
+                            <span className="discovery-avatar">{serverName(server).charAt(0).toUpperCase()}</span>
+                            <div className="discovery-info">
+                              <h3>{serverName(server)}</h3>
+                              <p>{server.settings.description || 'A community on Connect.'}</p>
+                              <span>{server.member_count ?? 0} members</span>
+                            </div>
+                            {joined ? (
+                              <Link className="secondary-button" to={`/servers/${uuid}`}>Open</Link>
+                            ) : (
+                              <button className="secondary-button" type="button" onClick={() => handleJoin(server)}>
+                                Join
+                              </button>
+                            )}
+                          </article>
+                        )
+                      })}
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
+          </>
         )}
       </section>
     </div>
