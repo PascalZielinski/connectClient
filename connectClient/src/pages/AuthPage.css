@@ -42,6 +42,11 @@
   line-height: 1.6;
 }
 
+.auth-info {
+  color: #2563eb;
+  font-size: 0.9rem;
+}
+
 .auth-form {
   display: flex;
   flex-direction: column;

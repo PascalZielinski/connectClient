@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext.jsx'
 import './AuthPage.css'
+import { invoke } from '@tauri-apps/api/core'
 
 function AuthPage({ mode }) {
   const isRegister = mode === 'register'
@@ -12,12 +13,15 @@ function AuthPage({ mode }) {
   const [passwordConfirm, setPasswordConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
 
   if (status === 'authenticated') return <Navigate to="/" replace />
 
   async function handleSubmit(event) {
     event.preventDefault()
     setError('')
+    setInfo('')
+
     if (isRegister && password !== passwordConfirm) {
       setError('Passwords do not match.')
       return
@@ -25,10 +29,22 @@ function AuthPage({ mode }) {
 
     setSubmitting(true)
     try {
+      const deviceSecret = await invoke('get_device_secret')
       const credentials = isRegister
         ? { email, password, password_confirm: passwordConfirm }
         : { email, password }
-      await authenticate(isRegister ? '/register' : '/login', credentials)
+
+      const result = await authenticate(
+        isRegister ? '/register' : '/login',
+        credentials,
+        deviceSecret,
+      )
+
+      if (result.deviceVerificationRequired) {
+        setInfo(result.message || 'Please confirm this device via the email we sent you, then sign in again.')
+        return
+      }
+
       navigate('/', { replace: true })
     } catch (submitError) {
       setError(submitError.message || 'We could not complete your request.')
@@ -92,6 +108,8 @@ function AuthPage({ mode }) {
             {submitting ? 'Please wait…' : isRegister ? 'Create account' : 'Sign in'}
           </button>
         </form>
+
+        {info && <p className="auth-info" role="status">{info}</p>}
 
         <p className="auth-switch">
           {isRegister ? 'Already have an account?' : 'New to Connect?'}{' '}

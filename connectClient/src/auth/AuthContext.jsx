@@ -1,13 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { apiPost, apiRequest, clearTokens, getTokens, refreshSession, saveTokens } from '../api/client.js'
 import { serverList } from '../api/servers.js'
-import {
-  defaultDeviceName,
-  exportPublicKeyPem,
-  generateKeyPair,
-  loadDevice,
-  saveDevice,
-} from './deviceKeys.js'
 
 const AuthContext = createContext(null)
 
@@ -80,70 +73,37 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('connect:unauthorized', handleUnauthorized)
   }, [])
 
-  const ensureDeviceRegistered = useCallback(async (email) => {
-    const device = await loadDevice(email)
-
-    // 1) Keypair anlegen, falls lokal noch keines existiert
-    if (!device.privateKey || !device.publicKeyPem) {
-      const keyPair = await generateKeyPair()
-      device.privateKey = keyPair.privateKey
-      device.publicKeyPem = await exportPublicKeyPem(keyPair.publicKey)
-      await saveDevice(email, device)
-    }
-
-    // 2) Server-Registrierung nachholen, falls deviceUuid fehlt
-    if (!device.deviceUuid) {
-      const result = await apiPost('/trusted/device', {
-        deviceName: defaultDeviceName(),
-        publicKey: device.publicKeyPem,
-      })
-      if (!result?.deviceUuid) {
-        throw new Error('The server did not return a device UUID.')
-      }
-      device.deviceUuid = result.deviceUuid
-      await saveDevice(email, device)
-    }
-
-    return device
-  }, [])
-
-  const authenticate = useCallback(async (endpoint, credentials) => {
+  const authenticate = useCallback(async (endpoint, credentials, deviceSecret) => {
     setStatus('checking')
     setError('')
     setServersError('')
 
-    const email = credentials.email
-
     try {
-      // Vor dem Login: vorhandene Device-UUID mitsenden, damit der
-      // Backend-Listener das Gerät prüfen kann.
-      const { deviceUuid: existingUuid } = await loadDevice(email)
+      const options = { skipAuth: true, skipRefresh: true }
 
-      const tokenResponse = await apiPost(endpoint, credentials, {
-        skipAuth: true,
-        skipRefresh: true,
-        headers: existingUuid ? { 'X-Device-Id': existingUuid } : {},
-      })
-      if (!tokenResponse?.token || !tokenResponse?.refresh_token) {
+      if (deviceSecret) {
+        options.headers = { 'X-Device-Secret': deviceSecret }
+      }
+
+      const response = await apiPost(endpoint, credentials, options)
+
+      if (response?.status === 'device_verification_required') {
+        setStatus('unauthenticated')
+        return { deviceVerificationRequired: true, message: response.message }
+      }
+
+      if (!response?.token || !response?.refresh_token) {
         throw new Error('The server did not return both access and refresh tokens.')
       }
-      saveTokens(tokenResponse)
+      saveTokens(response)
 
       const account = await apiRequest('/me')
       setUser(account?.user || account)
-
-      // Nach dem Login: Gerät registrieren, falls noch nicht geschehen.
-      // Fehler blockieren den Login NICHT – beim nächsten Login wird
-      // der Schritt automatisch wiederholt.
-      try {
-        await ensureDeviceRegistered(email)
-      } catch (deviceError) {
-        console.warn('Device registration failed, will retry on next login:', deviceError)
-      }
-
       setStatus('authenticated')
       setError('')
       loadServers().catch(() => {})
+
+      return { deviceVerificationRequired: false }
     } catch (authError) {
       clearTokens()
       setUser(null)
@@ -151,7 +111,7 @@ export function AuthProvider({ children }) {
       setStatus('unauthenticated')
       throw authError
     }
-  }, [loadServers, ensureDeviceRegistered])
+  }, [loadServers])
 
   const logout = useCallback(() => {
     clearTokens()
